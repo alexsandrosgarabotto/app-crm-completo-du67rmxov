@@ -118,3 +118,131 @@ export interface CompanySettings {
   created: string
   updated: string
 }
+
+// ================= ESTOQUE =================
+export interface Product {
+  id: string
+  name: string
+  sku?: string
+  description?: string
+  category?: string
+  unit?: string // UN, KG, CX, PC, M
+  sale_price?: number
+  cost_price?: number
+  stock_quantity?: number
+  min_stock?: number
+  active?: boolean
+  created_by?: string
+  created: string
+  updated: string
+}
+
+export type StockMovementType = 'entry' | 'exit' | 'adjustment'
+
+export interface StockMovement {
+  id: string
+  product_id: string
+  type: StockMovementType
+  quantity: number
+  reason?: string
+  deal_id?: string
+  date?: string // YYYY-MM-DD
+  user_id?: string
+  created: string
+  updated: string
+  expand?: {
+    product_id?: Product
+    deal_id?: Deal
+    user_id?: User
+  }
+}
+
+// ================= SERVIÇOS =================
+export interface Service {
+  id: string
+  name: string
+  description?: string
+  price?: number
+  duration_minutes?: number
+  category?: string
+  iss_rate?: number
+  active?: boolean
+  created_by?: string
+  created: string
+  updated: string
+}
+
+// ================= ITENS DA VENDA =================
+export type DealItemType = 'product' | 'service'
+
+export interface DealItem {
+  id: string
+  deal_id: string
+  item_type: DealItemType
+  product_id?: string
+  service_id?: string
+  name_snapshot: string
+  quantity: number
+  unit_price: number
+  total_price: number
+  created: string
+  updated: string
+  expand?: {
+    product_id?: Product
+    service_id?: Service
+  }
+}
+
+// ================= MÓDULO FISCAL (NF-e / NFS-e) =================
+export type FiscalDocType = 'NFE' | 'NFSE'
+export type FiscalDocStatus =
+  | 'pending'
+  | 'to_transmit'
+  | 'transmitted'
+  | 'authorized'
+  | 'rejected'
+  | 'cancelled'
+
+export interface FiscalDocument {
+  id: string
+  doc_type: FiscalDocType
+  deal_id?: string
+  client_id?: string
+  nature_operation?: string
+  total_amount: number
+  status: FiscalDocStatus
+  number?: string
+  series?: string
+  access_key?: string
+  provider_message?: string
+  issue_date?: string // YYYY-MM-DD
+  xml_payload?: string
+  created_by?: string
+  created: string
+  updated: string
+  expand?: {
+    deal_id?: Deal
+    client_id?: Client
+    created_by?: User
+  }
+}
+
+export type FiscalProvider = 'focus_nfe' | 'nfe_io' | 'plugnotas' | 'custom'
+export type FiscalEnvironment = 'homologation' | 'production'
+export type TaxRegime = 'simples_nacional' | 'lucro_presumido' | 'lucro_real' | 'mei'
+
+export interface FiscalSettings {
+  id: string
+  provider?: FiscalProvider
+  api_token?: string
+  environment?: FiscalEnvironment
+  nfe_series?: string
+  nfse_series?: string
+  cnpj?: string
+  state_registration?: string
+  municipal_registration?: string
+  tax_regime?: TaxRegime
+  certificate_info?: string
+  created: string
+  updated: string
+}

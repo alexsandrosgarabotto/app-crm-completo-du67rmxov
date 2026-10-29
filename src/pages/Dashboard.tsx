@@ -5,7 +5,9 @@ import { clientsService } from '@/services/clients'
 import { dealsService } from '@/services/deals'
 import { tasksService } from '@/services/tasks'
 import { invoicesService } from '@/services/invoices'
-import type { Client, Deal, Task, Invoice } from '@/types/crm'
+import { stockService } from '@/services/stock'
+import { fiscalService } from '@/services/fiscal'
+import type { Client, Deal, Task, Invoice, Product, FiscalDocument } from '@/types/crm'
 import {
   Users,
   Kanban,
@@ -16,6 +18,9 @@ import {
   ArrowUpRight,
   Plus,
   AlertTriangle,
+  Boxes,
+  Receipt,
+  Wrench,
 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -30,6 +35,8 @@ export default function DashboardPage() {
   const [deals, setDeals] = useState<Deal[]>([])
   const [tasks, setTasks] = useState<Task[]>([])
   const [invoices, setInvoices] = useState<Invoice[]>([])
+  const [products, setProducts] = useState<Product[]>([])
+  const [fiscalDocs, setFiscalDocs] = useState<FiscalDocument[]>([])
 
   useEffect(() => {
     loadDashboardData()
@@ -38,16 +45,21 @@ export default function DashboardPage() {
   const loadDashboardData = async () => {
     setLoading(true)
     try {
-      const [clientsData, dealsData, tasksData, invoicesData] = await Promise.all([
-        clientsService.getAll(),
-        dealsService.getAll(),
-        tasksService.getAll(),
-        invoicesService.getAll(),
-      ])
+      const [clientsData, dealsData, tasksData, invoicesData, productsData, fiscalData] =
+        await Promise.all([
+          clientsService.getAll(),
+          dealsService.getAll(),
+          tasksService.getAll(),
+          invoicesService.getAll(),
+          stockService.getProducts(),
+          fiscalService.getDocuments(),
+        ])
       setClients(clientsData)
       setDeals(dealsData)
       setTasks(tasksData)
       setInvoices(invoicesData)
+      setProducts(productsData)
+      setFiscalDocs(fiscalData)
     } catch (err) {
       console.error('Erro ao carregar dados do dashboard:', err)
     } finally {
@@ -75,6 +87,13 @@ export default function DashboardPage() {
 
   const payables = invoices.filter((inv) => inv.type === 'payable')
   const totalPayable = payables.reduce((acc, inv) => acc + inv.amount, 0)
+
+  const lowStockProducts = products.filter(
+    (p) => (p.stock_quantity ?? 0) <= (p.min_stock ?? 0) && p.active !== false,
+  )
+  const pendingFiscalDocs = fiscalDocs.filter(
+    (d) => d.status === 'to_transmit' || d.status === 'pending',
+  )
 
   const formatCurrency = (val: number) => {
     return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val)
@@ -147,6 +166,61 @@ export default function DashboardPage() {
           </Button>
         </div>
       </div>
+
+      {/* Alertas Rápidos: Estoque Baixo e Notas Pendentes */}
+      {(lowStockProducts.length > 0 || pendingFiscalDocs.length > 0) && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {lowStockProducts.length > 0 && (
+            <div className="p-3.5 rounded-lg border border-rose-200 bg-rose-50/70 flex items-center justify-between text-xs text-rose-900">
+              <div className="flex items-center gap-2.5">
+                <div className="h-8 w-8 rounded-md bg-rose-200 text-rose-800 flex items-center justify-center font-bold">
+                  <AlertTriangle className="h-4 w-4" />
+                </div>
+                <div>
+                  <p className="font-bold text-sm text-rose-950">
+                    {lowStockProducts.length} produto(s) com estoque baixo!
+                  </p>
+                  <p className="text-[11px] text-rose-700">Abaixo do estoque mínimo configurado.</p>
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => navigate('/estoque')}
+                className="h-7 text-xs bg-white text-rose-700 border-rose-300 hover:bg-rose-50"
+              >
+                Ver Estoque <ArrowUpRight className="h-3 w-3 ml-1" />
+              </Button>
+            </div>
+          )}
+
+          {pendingFiscalDocs.length > 0 && (
+            <div className="p-3.5 rounded-lg border border-amber-200 bg-amber-50/70 flex items-center justify-between text-xs text-amber-900">
+              <div className="flex items-center gap-2.5">
+                <div className="h-8 w-8 rounded-md bg-amber-200 text-amber-800 flex items-center justify-center font-bold">
+                  <Receipt className="h-4 w-4" />
+                </div>
+                <div>
+                  <p className="font-bold text-sm text-amber-950">
+                    {pendingFiscalDocs.length} nota(s) pendente(s) de transmissão
+                  </p>
+                  <p className="text-[11px] text-amber-700">
+                    NF-e/NFS-e geradas aguardando conexão com provedor.
+                  </p>
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => navigate('/notas-fiscais')}
+                className="h-7 text-xs bg-white text-amber-700 border-amber-300 hover:bg-amber-50"
+              >
+                Ver Notas <ArrowUpRight className="h-3 w-3 ml-1" />
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Cards de Métricas Principais */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

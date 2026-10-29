@@ -3,7 +3,10 @@ import { useAuth } from '@/hooks/use-auth'
 import { dealsService } from '@/services/deals'
 import { clientsService } from '@/services/clients'
 import { companyService } from '@/services/company'
-import type { Deal, DealStage, Client, User } from '@/types/crm'
+import { stockService } from '@/services/stock'
+import { servicesCatalogService } from '@/services/servicesCatalog'
+import { dealItemsService } from '@/services/dealItems'
+import type { Deal, DealStage, Client, User, Product, Service, DealItem } from '@/types/crm'
 import {
   Kanban,
   Plus,
@@ -19,6 +22,11 @@ import {
   ArrowLeft,
   CheckCircle,
   XCircle,
+  Package,
+  Wrench,
+  AlertTriangle,
+  Receipt,
+  ShoppingCart,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -35,6 +43,7 @@ import {
 } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/hooks/use-toast'
+import { useNavigate } from 'react-router-dom'
 
 const STAGES: { id: DealStage; label: string; color: string; bgHeader: string }[] = [
   {
@@ -58,11 +67,25 @@ const STAGES: { id: DealStage; label: string; color: string; bgHeader: string }[
   { id: 'lost', label: 'Perdido', color: 'text-rose-700', bgHeader: 'bg-rose-50 border-rose-200' },
 ]
 
+interface DraftDealItem {
+  id?: string
+  item_type: 'product' | 'service'
+  product_id?: string
+  service_id?: string
+  name_snapshot: string
+  quantity: number
+  unit_price: number
+  total_price: number
+}
+
 export default function PipelineDealsPage() {
   const { user } = useAuth()
+  const navigate = useNavigate()
   const [deals, setDeals] = useState<Deal[]>([])
   const [clients, setClients] = useState<Client[]>([])
   const [teamMembers, setTeamMembers] = useState<User[]>([])
+  const [catalogProducts, setCatalogProducts] = useState<Product[]>([])
+  const [catalogServices, setCatalogServices] = useState<Service[]>([])
   const [loading, setLoading] = useState(true)
 
   // Dialog Criar / Editar Venda
@@ -79,6 +102,12 @@ export default function PipelineDealsPage() {
   const [formUserId, setFormUserId] = useState('')
   const [formNotes, setFormNotes] = useState('')
 
+  // Itens da Venda
+  const [dealItems, setDealItems] = useState<DraftDealItem[]>([])
+  const [selectedItemType, setSelectedItemType] = useState<'product' | 'service'>('product')
+  const [selectedCatalogId, setSelectedCatalogId] = useState('')
+  const [addItemQty, setAddItemQty] = useState('1')
+
   // Drag & Drop HTML5 nativo
   const [draggedDealId, setDraggedDealId] = useState<string | null>(null)
 
@@ -89,14 +118,18 @@ export default function PipelineDealsPage() {
   const loadData = async () => {
     setLoading(true)
     try {
-      const [dealsData, clientsData, teamData] = await Promise.all([
+      const [dealsData, clientsData, teamData, productsData, servicesData] = await Promise.all([
         dealsService.getAll(),
         clientsService.getAll(),
         companyService.getTeamMembers(),
+        stockService.getProducts(),
+        servicesCatalogService.getAll(),
       ])
       setDeals(dealsData)
       setClients(clientsData)
       setTeamMembers(teamData)
+      setCatalogProducts(productsData)
+      setCatalogServices(servicesData)
     } catch (err) {
       console.error('Erro ao carregar pipeline:', err)
       toast({
@@ -118,10 +151,14 @@ export default function PipelineDealsPage() {
     setFormExpectedDate('')
     setFormUserId(user?.id || '')
     setFormNotes('')
+    setDealItems([])
+    setSelectedCatalogId(catalogProducts[0]?.id || '')
+    setSelectedItemType('product')
+    setAddItemQty('1')
     setIsDialogOpen(true)
   }
 
-  const handleOpenEdit = (deal: Deal) => {
+  const handleOpenEdit = async (deal: Deal) => {
     setEditingDeal(deal)
     setFormTitle(deal.title || '')
     setFormClientId(deal.client_id || '')
@@ -130,7 +167,136 @@ export default function PipelineDealsPage() {
     setFormExpectedDate(deal.expected_close_date || '')
     setFormUserId(deal.user_id || '')
     setFormNotes(deal.notes || '')
+
+    // Carregar itens existentes
+    try {
+      const items = await dealItemsService.getByDealId(deal.id)
+      setDealItems(
+        items.map((i) => ({
+          id: i.id,
+          item_type: i.item_type,
+          product_id: i.product_id,
+          service_id: i.service_id,
+          name_snapshot: i.name_snapshot,
+          quantity: i.quantity,
+          unit_price: i.unit_price,
+          total_price: i.total_price,
+        })),
+      )
+    } catch {
+      setDealItems([])
+    }
+
     setIsDialogOpen(true)
+  }
+
+  // Adicionar item à lista da venda
+  const handleAddItem = () => {
+    if (!selectedCatalogId) return
+    const qty = parseFloat(addItemQty) || 1
+
+    if (selectedItemType === 'product') {
+      const prod = catalogProducts.find((p) => p.id === selectedCatalogId)
+      if (!prod) return
+      const unitPrice = prod.sale_price || 0
+      const newItem: DraftDealItem = {
+        item_type: 'product',
+        product_id: prod.id,
+        name_snapshot: prod.name,
+        quantity: qty,
+        unit_price: unitPrice,
+        total_price: qty * unitPrice,
+      }
+      const updated = [...dealItems, newItem]
+      setDealItems(updated)
+      recalcTotal(updated)
+    } else {
+      const srv = catalogServices.find((s) => s.id === selectedCatalogId)
+      if (!srv) return
+      const unitPrice = srv.price || 0
+      const newItem: DraftDealItem = {
+        item_type: 'service',
+        service_id: srv.id,
+        name_snapshot: srv.name,
+        quantity: qty,
+        unit_price: unitPrice,
+        total_price: qty * unitPrice,
+      }
+      const updated = [...dealItems, newItem]
+      setDealItems(updated)
+      recalcTotal(updated)
+    }
+    setAddItemQty('1')
+  }
+
+  const handleRemoveItem = (index: number) => {
+    const updated = dealItems.filter((_, idx) => idx !== index)
+    setDealItems(updated)
+    recalcTotal(updated)
+  }
+
+  const handleUpdateItemQty = (index: number, newQty: number) => {
+    const updated = dealItems.map((item, idx) => {
+      if (idx !== index) return item
+      const qty = Math.max(1, newQty)
+      return {
+        ...item,
+        quantity: qty,
+        total_price: qty * item.unit_price,
+      }
+    })
+    setDealItems(updated)
+    recalcTotal(updated)
+  }
+
+  const handleUpdateItemPrice = (index: number, newPrice: number) => {
+    const updated = dealItems.map((item, idx) => {
+      if (idx !== index) return item
+      const price = Math.max(0, newPrice)
+      return {
+        ...item,
+        unit_price: price,
+        total_price: item.quantity * price,
+      }
+    })
+    setDealItems(updated)
+    recalcTotal(updated)
+  }
+
+  const recalcTotal = (items: DraftDealItem[]) => {
+    if (items.length > 0) {
+      const sum = items.reduce((acc, i) => acc + i.total_price, 0)
+      setFormValue(sum.toFixed(2))
+    }
+  }
+
+  // Baixa automática de estoque para itens de produto ao fechar como Ganho
+  const processStockExitForWonDeal = async (dealId: string) => {
+    try {
+      const items = await dealItemsService.getByDealId(dealId)
+      const productItems = items.filter((i) => i.item_type === 'product' && i.product_id)
+
+      if (productItems.length === 0) return
+
+      for (const item of productItems) {
+        if (!item.product_id) continue
+        await stockService.createMovement({
+          productId: item.product_id,
+          type: 'exit',
+          quantity: item.quantity,
+          reason: `Venda concluída (Pedido #${dealId.substring(0, 6)}: ${item.name_snapshot})`,
+          dealId: dealId,
+          userId: user?.id,
+        })
+      }
+
+      toast({
+        title: 'Estoque Atualizado',
+        description: `Saída automática de ${productItems.length} produto(s) realizada no estoque com sucesso!`,
+      })
+    } catch (err) {
+      console.error('Erro na baixa de estoque automática:', err)
+    }
   }
 
   const handleSave = async (e: React.FormEvent) => {
@@ -146,25 +312,42 @@ export default function PipelineDealsPage() {
 
     setSubmitting(true)
     try {
+      const calculatedVal =
+        dealItems.length > 0
+          ? dealItems.reduce((acc, i) => acc + i.total_price, 0)
+          : formValue
+            ? parseFloat(formValue)
+            : 0
+
       const payload: Partial<Deal> = {
         title: formTitle.trim(),
         client_id: formClientId,
-        value: formValue ? parseFloat(formValue) : 0,
+        value: calculatedVal,
         stage: formStage,
         expected_close_date: formExpectedDate || undefined,
         user_id: formUserId || undefined,
         notes: formNotes.trim() || undefined,
       }
 
+      let targetDeal: Deal
+
       if (editingDeal) {
-        const updated = await dealsService.update(editingDeal.id, payload)
+        targetDeal = await dealsService.update(editingDeal.id, payload)
         toast({ title: 'Sucesso', description: 'Venda atualizada!' })
-        setDeals((prev) => prev.map((d) => (d.id === updated.id ? updated : d)))
+        setDeals((prev) => prev.map((d) => (d.id === targetDeal.id ? targetDeal : d)))
       } else {
         payload.created_by = user?.id
-        const created = await dealsService.create(payload)
+        targetDeal = await dealsService.create(payload)
         toast({ title: 'Sucesso', description: 'Nova oportunidade criada no pipeline!' })
-        setDeals((prev) => [created, ...prev])
+        setDeals((prev) => [targetDeal, ...prev])
+      }
+
+      // Sincroniza os itens da venda
+      await dealItemsService.syncItemsForDeal(targetDeal.id, dealItems)
+
+      // Se foi salvo já como Ganho, baixa o estoque
+      if (formStage === 'won' && (!editingDeal || editingDeal.stage !== 'won')) {
+        await processStockExitForWonDeal(targetDeal.id)
       }
 
       setIsDialogOpen(false)
@@ -222,9 +405,13 @@ export default function PipelineDealsPage() {
         title: 'Etapa Atualizada',
         description: `Venda movida para "${STAGES.find((s) => s.id === targetStage)?.label}".`,
       })
+
+      // Se moveu para Ganho (won), baixa o estoque dos produtos
+      if (targetStage === 'won') {
+        await processStockExitForWonDeal(dealId)
+      }
     } catch (err) {
       console.error(err)
-      // Reverter se falhar
       setDeals((prev) =>
         prev.map((d) => (d.id === dealId ? { ...d, stage: currentDeal.stage } : d)),
       )
@@ -250,6 +437,11 @@ export default function PipelineDealsPage() {
         title: 'Etapa Atualizada',
         description: `Venda movida com sucesso.`,
       })
+
+      // Se marcou como Ganho, dar baixa automática de estoque
+      if (targetStage === 'won') {
+        await processStockExitForWonDeal(dealId)
+      }
     } catch {
       setDeals((prev) =>
         prev.map((d) => (d.id === dealId ? { ...d, stage: currentDeal.stage } : d)),
@@ -271,12 +463,18 @@ export default function PipelineDealsPage() {
             Funil de Vendas (Pipeline)
           </h1>
           <p className="text-sm text-slate-500 mt-1">
-            Arraste os cards entre as etapas de Lead, Em Andamento, Ganho e Perdido.
+            Componha propostas com produtos do estoque e catálogo de serviços. Ao marcar como Ganho,
+            a baixa de estoque ocorre automaticamente!
           </p>
         </div>
-        <Button onClick={() => handleOpenCreate()} className="bg-blue-600 hover:bg-blue-700">
-          <Plus className="h-4 w-4 mr-1.5" /> Nova Oportunidade
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button onClick={() => navigate('/notas-fiscais')} variant="outline" size="sm">
+            <Receipt className="h-4 w-4 mr-1.5 text-blue-600" /> Notas Fiscais
+          </Button>
+          <Button onClick={() => handleOpenCreate()} className="bg-blue-600 hover:bg-blue-700">
+            <Plus className="h-4 w-4 mr-1.5" /> Nova Oportunidade
+          </Button>
+        </div>
       </div>
 
       {/* PIPELINE KANBAN COLUMNS */}
@@ -339,7 +537,7 @@ export default function PipelineDealsPage() {
                               <button
                                 onClick={() => handleOpenEdit(deal)}
                                 className="text-slate-400 hover:text-blue-600 p-0.5 rounded"
-                                title="Editar negócio"
+                                title="Editar negócio e itens"
                               >
                                 <Edit className="h-3.5 w-3.5" />
                               </button>
@@ -411,6 +609,7 @@ export default function PipelineDealsPage() {
                                 <button
                                   onClick={() => handleQuickMove(deal.id, 'won')}
                                   className="text-emerald-600 hover:underline inline-flex items-center gap-0.5 font-bold"
+                                  title="Marcar como ganho e dar baixa no estoque dos produtos"
                                 >
                                   <CheckCircle className="h-3 w-3" /> Ganho!
                                 </button>
@@ -418,9 +617,18 @@ export default function PipelineDealsPage() {
                             )}
 
                             {stage.id === 'won' && (
-                              <span className="text-emerald-700 font-semibold text-[11px] flex items-center gap-1">
-                                <CheckCircle className="h-3 w-3" /> Fechamento com Sucesso
-                              </span>
+                              <div className="flex items-center justify-between w-full">
+                                <span className="text-emerald-700 font-semibold text-[11px] flex items-center gap-1">
+                                  <CheckCircle className="h-3 w-3" /> Ganho (Estoque Baixado)
+                                </span>
+                                <button
+                                  onClick={() => navigate('/notas-fiscais')}
+                                  className="text-blue-600 hover:underline inline-flex items-center gap-1 text-[11px]"
+                                  title="Emitir NF-e ou NFS-e desta venda"
+                                >
+                                  <Receipt className="h-3 w-3" /> Emitir Nota
+                                </button>
+                              </div>
                             )}
 
                             {stage.id === 'lost' && (
@@ -458,65 +666,48 @@ export default function PipelineDealsPage() {
         </div>
       )}
 
-      {/* MODAL CRIAR / EDITAR NEGÓCIO */}
+      {/* MODAL CRIAR / EDITAR NEGÓCIO COM COMPOSIÇÃO DE ITENS */}
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
-              {editingDeal ? 'Editar Negócio' : 'Nova Oportunidade de Venda'}
+              {editingDeal ? 'Editar Negócio e Itens' : 'Nova Oportunidade de Venda'}
             </DialogTitle>
             <DialogDescription>
-              Vincule a venda a um cliente, defina o valor e a etapa inicial do pipeline.
+              Vincule a venda ao cliente e componha itens de produtos (estoque) e serviços
+              (catálogo).
             </DialogDescription>
           </DialogHeader>
 
-          <form onSubmit={handleSave} className="space-y-4 pt-2">
+          <form onSubmit={handleSave} className="space-y-4 pt-1">
             <div className="space-y-1.5">
               <Label htmlFor="deal-title">Título do Negócio *</Label>
               <Input
                 id="deal-title"
                 value={formTitle}
                 onChange={(e) => setFormTitle(e.target.value)}
-                placeholder="Ex: Implantação de Software ou Venda de Equipamentos"
+                placeholder="Ex: Implantação de Software + Terminais POS"
                 required
               />
             </div>
 
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <Label htmlFor="deal-client">Cliente Vinculado *</Label>
-                {clients.length === 0 && (
-                  <span className="text-[11px] text-rose-500">Cadastre um cliente antes!</span>
-                )}
-              </div>
-              <select
-                id="deal-client"
-                value={formClientId}
-                onChange={(e) => setFormClientId(e.target.value)}
-                required
-                className="w-full flex h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs"
-              >
-                <option value="">Selecione um cliente...</option>
-                {clients.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name} {c.company ? `(${c.company})` : ''}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label htmlFor="deal-value">Valor Estimado (R$)</Label>
-                <Input
-                  id="deal-value"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={formValue}
-                  onChange={(e) => setFormValue(e.target.value)}
-                  placeholder="0,00"
-                />
+                <Label htmlFor="deal-client">Cliente Vinculado *</Label>
+                <select
+                  id="deal-client"
+                  value={formClientId}
+                  onChange={(e) => setFormClientId(e.target.value)}
+                  required
+                  className="w-full flex h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs"
+                >
+                  <option value="">Selecione um cliente...</option>
+                  {clients.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} {c.company ? `(${c.company})` : ''}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div className="space-y-1.5">
@@ -536,7 +727,214 @@ export default function PipelineDealsPage() {
               </div>
             </div>
 
+            {/* SEÇÃO DE COMPOSIÇÃO DE ITENS (PRODUTO / SERVIÇO) */}
+            <div className="border border-slate-200 rounded-lg p-3 bg-slate-50/70 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <ShoppingCart className="h-4 w-4 text-blue-600" />
+                  <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                    Composição da Venda (Produtos & Serviços)
+                  </span>
+                </div>
+                <span className="text-xs text-slate-500">
+                  {dealItems.length} item(ns) adicionado(s)
+                </span>
+              </div>
+
+              {/* Seletor para adicionar novo item */}
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 bg-white p-2.5 rounded-md border border-slate-200">
+                <div className="sm:col-span-3">
+                  <select
+                    value={selectedItemType}
+                    onChange={(e) => {
+                      const type = e.target.value as 'product' | 'service'
+                      setSelectedItemType(type)
+                      setSelectedCatalogId(
+                        type === 'product'
+                          ? catalogProducts[0]?.id || ''
+                          : catalogServices[0]?.id || '',
+                      )
+                    }}
+                    className="w-full h-8 rounded border border-input bg-background px-2 text-xs font-semibold"
+                  >
+                    <option value="product">📦 Produto (Estoque)</option>
+                    <option value="service">🛠️ Serviço (Catálogo)</option>
+                  </select>
+                </div>
+
+                <div className="sm:col-span-5">
+                  <select
+                    value={selectedCatalogId}
+                    onChange={(e) => setSelectedCatalogId(e.target.value)}
+                    className="w-full h-8 rounded border border-input bg-background px-2 text-xs"
+                  >
+                    <option value="">Selecione o item...</option>
+                    {selectedItemType === 'product'
+                      ? catalogProducts.map((p) => {
+                          const isLow = (p.stock_quantity ?? 0) <= 0
+                          return (
+                            <option key={p.id} value={p.id}>
+                              {p.name} — {formatCurrency(p.sale_price || 0)}{' '}
+                              {isLow
+                                ? '(⚠️ Estoque zerado)'
+                                : `(Estoque: ${p.stock_quantity ?? 0})`}
+                            </option>
+                          )
+                        })
+                      : catalogServices.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name} — {formatCurrency(s.price || 0)}
+                          </option>
+                        ))}
+                  </select>
+                </div>
+
+                <div className="sm:col-span-2">
+                  <Input
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={addItemQty}
+                    onChange={(e) => setAddItemQty(e.target.value)}
+                    placeholder="Qtd"
+                    className="h-8 text-xs text-center"
+                  />
+                </div>
+
+                <div className="sm:col-span-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={handleAddItem}
+                    disabled={!selectedCatalogId}
+                    className="w-full h-8 bg-blue-600 hover:bg-blue-700 text-xs px-2"
+                  >
+                    <Plus className="h-3 w-3 mr-1" /> Incluir
+                  </Button>
+                </div>
+              </div>
+
+              {/* Tabela de itens incluídos */}
+              {dealItems.length > 0 ? (
+                <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                  {dealItems.map((item, idx) => {
+                    // Checar estoque do produto para aviso
+                    const productObj =
+                      item.item_type === 'product' && item.product_id
+                        ? catalogProducts.find((p) => p.id === item.product_id)
+                        : null
+
+                    const stockAvail = productObj?.stock_quantity ?? 999
+                    const isInsufficient =
+                      item.item_type === 'product' && stockAvail < item.quantity
+
+                    return (
+                      <div
+                        key={idx}
+                        className={`p-2 rounded border bg-white flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs ${
+                          isInsufficient ? 'border-amber-300 bg-amber-50/40' : 'border-slate-200'
+                        }`}
+                      >
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            {item.item_type === 'product' ? (
+                              <Package className="h-3.5 w-3.5 text-blue-600 shrink-0" />
+                            ) : (
+                              <Wrench className="h-3.5 w-3.5 text-purple-600 shrink-0" />
+                            )}
+                            <span className="font-semibold text-slate-800 truncate">
+                              {item.name_snapshot}
+                            </span>
+                            <Badge
+                              variant="outline"
+                              className="text-[10px] px-1 py-0 border-slate-200"
+                            >
+                              {item.item_type === 'product' ? 'Produto' : 'Serviço'}
+                            </Badge>
+                          </div>
+
+                          {isInsufficient && (
+                            <p className="text-[11px] text-amber-700 font-medium flex items-center gap-1 mt-0.5">
+                              <AlertTriangle className="h-3 w-3 shrink-0" />
+                              Aviso: estoque atual ({stockAvail}) é inferior à quantidade
+                              solicitada.
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <div className="flex items-center gap-1">
+                            <span className="text-[11px] text-slate-400">Qtd:</span>
+                            <Input
+                              type="number"
+                              min="1"
+                              value={item.quantity}
+                              onChange={(e) =>
+                                handleUpdateItemQty(idx, parseFloat(e.target.value) || 1)
+                              }
+                              className="h-7 w-14 text-xs text-center p-1"
+                            />
+                          </div>
+
+                          <div className="flex items-center gap-1">
+                            <span className="text-[11px] text-slate-400">Unit:</span>
+                            <Input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={item.unit_price}
+                              onChange={(e) =>
+                                handleUpdateItemPrice(idx, parseFloat(e.target.value) || 0)
+                              }
+                              className="h-7 w-20 text-xs text-right p-1"
+                            />
+                          </div>
+
+                          <span className="font-bold text-slate-900 w-20 text-right">
+                            {formatCurrency(item.total_price)}
+                          </span>
+
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveItem(idx)}
+                            className="text-slate-400 hover:text-rose-600 p-1"
+                            title="Remover item"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : (
+                <p className="text-xs text-slate-400 text-center py-2 italic">
+                  Nenhum item adicionado ainda. Você pode adicionar produtos e serviços acima ou
+                  definir o valor manualmente abaixo.
+                </p>
+              )}
+            </div>
+
             <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="deal-value">Valor Total do Negócio (R$)</Label>
+                <Input
+                  id="deal-value"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={formValue}
+                  onChange={(e) => setFormValue(e.target.value)}
+                  placeholder="0,00"
+                  className={dealItems.length > 0 ? 'bg-slate-50 font-bold text-blue-700' : ''}
+                />
+                {dealItems.length > 0 && (
+                  <p className="text-[10px] text-slate-400">
+                    Calculado automaticamente da soma dos itens.
+                  </p>
+                )}
+              </div>
+
               <div className="space-y-1.5">
                 <Label htmlFor="deal-date">Previsão Fechamento</Label>
                 <Input
@@ -546,23 +944,23 @@ export default function PipelineDealsPage() {
                   onChange={(e) => setFormExpectedDate(e.target.value)}
                 />
               </div>
+            </div>
 
-              <div className="space-y-1.5">
-                <Label htmlFor="deal-user">Responsável</Label>
-                <select
-                  id="deal-user"
-                  value={formUserId}
-                  onChange={(e) => setFormUserId(e.target.value)}
-                  className="w-full flex h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs"
-                >
-                  <option value="">Não atribuído</option>
-                  {teamMembers.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="deal-user">Responsável</Label>
+              <select
+                id="deal-user"
+                value={formUserId}
+                onChange={(e) => setFormUserId(e.target.value)}
+                className="w-full flex h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs"
+              >
+                <option value="">Não atribuído</option>
+                {teamMembers.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <div className="space-y-1.5">
@@ -572,7 +970,7 @@ export default function PipelineDealsPage() {
                 rows={2}
                 value={formNotes}
                 onChange={(e) => setFormNotes(e.target.value)}
-                placeholder="Histórico da proposta, condições negociadas, etc."
+                placeholder="Condições comerciais negociadas, prazos, etc."
               />
             </div>
 
