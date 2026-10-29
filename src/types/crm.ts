@@ -246,3 +246,31 @@ export interface FiscalSettings {
   created: string
   updated: string
 }
+
+// ================= CUSTOS FIXOS MENSAIS =================
+export type FixedCostCategory =
+  | 'salarios'
+  | 'aluguel'
+  | 'energia'
+  | 'agua'
+  | 'internet'
+  | 'telefone'
+  | 'marketing'
+  | 'contabilidade'
+  | 'outros'
+
+export interface FixedCost {
+  id: string
+  name: string
+  category: FixedCostCategory
+  amount: number
+  due_day?: number
+  active: boolean
+  notes?: string
+  created_by?: string
+  created: string
+  updated: string
+  expand?: {
+    created_by?: User
+  }
+}

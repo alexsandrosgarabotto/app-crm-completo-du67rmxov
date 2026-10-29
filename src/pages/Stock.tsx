@@ -19,7 +19,14 @@ import {
   CheckCircle2,
   XCircle,
   ArrowRightLeft,
+  FileSpreadsheet,
 } from 'lucide-react'
+import {
+  ImportSpreadsheetModal,
+  type ImportColumnDefinition,
+  type ImportPreviewItem,
+} from '@/components/ImportSpreadsheetModal'
+import { normalizeHeader } from '@/lib/csvImportUtils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -43,6 +50,9 @@ export default function StockPage() {
   const [search, setSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState('all') // all, low_stock, active, inactive
+
+  // Modal Importação
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false)
 
   // Modal Produto (Criar / Editar)
   const [isProductModalOpen, setIsProductModalOpen] = useState(false)
@@ -311,9 +321,18 @@ export default function StockPage() {
             movimentações.
           </p>
         </div>
-        <Button onClick={handleOpenCreateProduct} className="bg-blue-600 hover:bg-blue-700">
-          <Plus className="h-4 w-4 mr-1.5" /> Novo Produto
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => setIsImportModalOpen(true)}
+            className="border-slate-300 text-slate-700 hover:bg-slate-50"
+          >
+            <FileSpreadsheet className="h-4 w-4 mr-1.5 text-emerald-600" /> Importar Produtos
+          </Button>
+          <Button onClick={handleOpenCreateProduct} className="bg-blue-600 hover:bg-blue-700">
+            <Plus className="h-4 w-4 mr-1.5" /> Novo Produto
+          </Button>
+        </div>
       </div>
 
       {/* Cards de Resumo */}
@@ -914,6 +933,182 @@ export default function StockPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* MODAL DE IMPORTAÇÃO DE PRODUTOS */}
+      <ImportSpreadsheetModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        title="Importar Produtos para o Estoque"
+        entityName="produtos"
+        templateFileName="modelo_importacao_produtos.csv"
+        columns={[
+          { key: 'sku', label: 'Código / SKU' },
+          { key: 'name', label: 'Nome do Produto', required: true },
+          { key: 'category', label: 'Categoria' },
+          { key: 'unit', label: 'Unidade (UN, KG, CX, PC, M)' },
+          { key: 'sale_price', label: 'Preço de Venda (R$)' },
+          { key: 'cost_price', label: 'Preço de Custo (R$)' },
+          { key: 'stock_quantity', label: 'Quantidade em Estoque' },
+          { key: 'min_stock', label: 'Estoque Mínimo' },
+          { key: 'description', label: 'Descrição' },
+        ]}
+        sampleData={[
+          [
+            'PROD-001',
+            'Teclado Mecânico Sem Fio RGB',
+            'Informática',
+            'UN',
+            '250.00',
+            '120.00',
+            '35',
+            '10',
+            'Switch azul padrão ABNT2 bluetooth',
+          ],
+          [
+            'PROD-002',
+            'Mouse Óptico Ergonômico USB',
+            'Informática',
+            'UN',
+            '89.90',
+            '38.00',
+            '50',
+            '15',
+            '1600 DPI com fio reforçado',
+          ],
+          [
+            'SUP-101',
+            'Bobina Térmica 80mm x 40m',
+            'Suprimentos',
+            'CX',
+            '120.00',
+            '75.00',
+            '20',
+            '5',
+            'Caixa com 30 rolos amarela',
+          ],
+        ]}
+        processRow={(row, rowIndex) => {
+          const normalized: Record<string, string> = {}
+          for (const [k, v] of Object.entries(row)) {
+            normalized[normalizeHeader(k)] = v
+          }
+
+          const sku =
+            normalized['codigo'] ||
+            normalized['codigo / sku'] ||
+            normalized['sku'] ||
+            normalized['cod'] ||
+            ''
+
+          const name =
+            normalized['nome'] ||
+            normalized['nome do produto'] ||
+            normalized['produto'] ||
+            normalized['descricao resumida'] ||
+            ''
+
+          const category = normalized['categoria'] || ''
+          const unit = normalized['unidade'] || normalized['un'] || 'UN'
+          const description = normalized['descricao'] || normalized['especificacoes'] || ''
+
+          const rawSalePrice =
+            normalized['preco de venda'] ||
+            normalized['preco de venda (r$)'] ||
+            normalized['preco venda'] ||
+            normalized['venda'] ||
+            '0'
+
+          const rawCostPrice =
+            normalized['preco de custo'] ||
+            normalized['preco de custo (r$)'] ||
+            normalized['preco custo'] ||
+            normalized['custo'] ||
+            '0'
+
+          const rawStockQty =
+            normalized['quantidade em estoque'] ||
+            normalized['quantidade'] ||
+            normalized['qtd estoque'] ||
+            normalized['estoque'] ||
+            '0'
+
+          const rawMinStock =
+            normalized['estoque minimo'] || normalized['minimo'] || normalized['qtd minima'] || '5'
+
+          const salePrice = parseFloat(rawSalePrice.replace(/[^\d.,-]/g, '').replace(',', '.')) || 0
+          const costPrice = parseFloat(rawCostPrice.replace(/[^\d.,-]/g, '').replace(',', '.')) || 0
+          const stockQty = parseFloat(rawStockQty.replace(/[^\d.,-]/g, '').replace(',', '.')) || 0
+          const minStock = parseFloat(rawMinStock.replace(/[^\d.,-]/g, '').replace(',', '.')) || 0
+
+          const errors: string[] = []
+          if (!name.trim()) {
+            errors.push('Nome do produto é obrigatório')
+          }
+          if (salePrice < 0) {
+            errors.push('Preço de venda inválido')
+          }
+
+          // Upsert se produto com mesmo SKU ou mesmo nome já existe
+          const existing = products.find((p) => {
+            if (sku && p.sku && p.sku.trim().toLowerCase() === sku.trim().toLowerCase()) return true
+            if (p.name && p.name.trim().toLowerCase() === name.trim().toLowerCase()) return true
+            return false
+          })
+
+          const data: Partial<Product> = {
+            id: existing?.id,
+            sku: sku.trim() || undefined,
+            name: name.trim(),
+            category: category.trim() || undefined,
+            unit: unit.trim().toUpperCase() || 'UN',
+            description: description.trim() || undefined,
+            sale_price: salePrice,
+            cost_price: costPrice,
+            stock_quantity: stockQty,
+            min_stock: minStock,
+            active: true,
+          }
+
+          return {
+            rowIndex,
+            data,
+            raw: row,
+            isValid: errors.length === 0,
+            errors,
+            isUpdate: !!existing,
+            existingRecordName: existing
+              ? `${existing.name} (${existing.sku || 'sem sku'})`
+              : undefined,
+          }
+        }}
+        onConfirmImport={async (validItems) => {
+          let imported = 0
+          let updated = 0
+          let ignored = 0
+
+          for (const item of validItems) {
+            try {
+              if (item.isUpdate && item.data.id) {
+                await stockService.updateProduct(item.data.id, item.data)
+                updated++
+              } else {
+                const payload = { ...item.data, created_by: user?.id }
+                delete payload.id
+                await stockService.createProduct(payload)
+                imported++
+              }
+            } catch (err) {
+              console.error('Falha ao importar produto:', item.rowIndex, err)
+              ignored++
+            }
+          }
+
+          return { imported, updated, ignored }
+        }}
+        onSuccess={() => {
+          loadProducts()
+        }}
+      />
     </div>
   )
 }

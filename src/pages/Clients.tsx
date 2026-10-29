@@ -15,7 +15,14 @@ import {
   Trash2,
   FileText,
   UserCheck,
+  FileSpreadsheet,
 } from 'lucide-react'
+import {
+  ImportSpreadsheetModal,
+  type ImportColumnDefinition,
+  type ImportPreviewItem,
+} from '@/components/ImportSpreadsheetModal'
+import { normalizeHeader } from '@/lib/csvImportUtils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -54,6 +61,9 @@ export default function ClientsPage() {
   // Ficha Detalhada do Cliente (Drawer/Sheet)
   const [selectedClient, setSelectedClient] = useState<Client | null>(null)
   const [isDetailsOpen, setIsDetailsOpen] = useState(false)
+
+  // Modal de Importação
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false)
 
   // Form State
   const [formName, setFormName] = useState('')
@@ -259,9 +269,18 @@ export default function ClientsPage() {
             Cadastre, edite e consulte a ficha cadastral de cada cliente.
           </p>
         </div>
-        <Button onClick={handleOpenCreate} className="bg-blue-600 hover:bg-blue-700">
-          <Plus className="h-4 w-4 mr-1.5" /> Novo Cliente
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => setIsImportModalOpen(true)}
+            className="border-slate-300 text-slate-700 hover:bg-slate-50"
+          >
+            <FileSpreadsheet className="h-4 w-4 mr-1.5 text-emerald-600" /> Importar Clientes
+          </Button>
+          <Button onClick={handleOpenCreate} className="bg-blue-600 hover:bg-blue-700">
+            <Plus className="h-4 w-4 mr-1.5" /> Novo Cliente
+          </Button>
+        </div>
       </div>
 
       {/* Barra de Filtros e Busca */}
@@ -684,6 +703,165 @@ export default function ClientsPage() {
           )}
         </SheetContent>
       </Sheet>
+
+      {/* MODAL DE IMPORTAÇÃO DE PLANILHA */}
+      <ImportSpreadsheetModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        title="Importar Clientes via Planilha"
+        entityName="clientes"
+        templateFileName="modelo_importacao_clientes.csv"
+        columns={[
+          { key: 'name', label: 'Nome Completo / Razão Social', required: true },
+          { key: 'email', label: 'E-mail' },
+          { key: 'phone', label: 'Telefone' },
+          { key: 'document', label: 'CPF / CNPJ' },
+          { key: 'company', label: 'Empresa / Nome Fantasia' },
+          { key: 'address', label: 'Endereço' },
+          { key: 'city', label: 'Cidade' },
+          { key: 'state', label: 'Estado (UF)' },
+          { key: 'status', label: 'Status (ativo, lead, inativo)' },
+          { key: 'notes', label: 'Observações' },
+        ]}
+        sampleData={[
+          [
+            'Ana Paula Santos',
+            'ana.santos@exemplo.com.br',
+            '(11) 98765-4321',
+            '123.456.789-00',
+            'Santos Soluções',
+            'Av. Paulista, 1000',
+            'São Paulo',
+            'SP',
+            'ativo',
+            'Cliente vindo de indicação',
+          ],
+          [
+            'Construtora Progresso Ltda',
+            'compras@progresso.com.br',
+            '(11) 3456-7890',
+            '12.345.678/0001-90',
+            'Progresso Obras',
+            'Rua das Palmeiras, 50',
+            'Campinas',
+            'SP',
+            'lead',
+            'Interesse em consultoria mensal',
+          ],
+        ]}
+        processRow={(row, rowIndex) => {
+          // Normaliza as chaves
+          const normalized: Record<string, string> = {}
+          for (const [k, v] of Object.entries(row)) {
+            normalized[normalizeHeader(k)] = v
+          }
+
+          const name =
+            normalized['nome'] ||
+            normalized['nome completo'] ||
+            normalized['nome completo / razao social'] ||
+            normalized['razao social'] ||
+            normalized['cliente'] ||
+            ''
+
+          const email = normalized['e-mail'] || normalized['email'] || ''
+          const phone =
+            normalized['telefone'] || normalized['celular'] || normalized['whatsapp'] || ''
+          const document =
+            normalized['cpf'] ||
+            normalized['cnpj'] ||
+            normalized['documento'] ||
+            normalized['cpf / cnpj'] ||
+            ''
+          const company =
+            normalized['empresa'] ||
+            normalized['nome fantasia'] ||
+            normalized['empresa / nome fantasia'] ||
+            ''
+          const address = normalized['endereco'] || normalized['logradouro'] || ''
+          const city = normalized['cidade'] || ''
+          const state = normalized['estado'] || normalized['estado (uf)'] || normalized['uf'] || ''
+          const notes = normalized['observacoes'] || normalized['notas'] || ''
+          const rawStatus = (normalized['status'] || '').toLowerCase()
+
+          let status: 'lead' | 'active' | 'inactive' = 'active'
+          if (rawStatus.includes('lead') || rawStatus.includes('prospect')) {
+            status = 'lead'
+          } else if (rawStatus.includes('inativ') || rawStatus.includes('bloq')) {
+            status = 'inactive'
+          }
+
+          const errors: string[] = []
+          if (!name.trim()) {
+            errors.push('Nome do cliente é obrigatório')
+          }
+
+          // Verifica se já existe para fazer upsert (por e-mail, documento ou nome exato)
+          const existing = clients.find((c) => {
+            if (email && c.email && c.email.trim().toLowerCase() === email.trim().toLowerCase())
+              return true
+            if (
+              document &&
+              c.document &&
+              c.document.replace(/\D/g, '') === document.replace(/\D/g, '')
+            )
+              return true
+            if (c.name && c.name.trim().toLowerCase() === name.trim().toLowerCase()) return true
+            return false
+          })
+
+          const data: Partial<Client> = {
+            id: existing?.id,
+            name: name.trim(),
+            email: email.trim() || undefined,
+            phone: phone.trim() || undefined,
+            document: document.trim() || undefined,
+            company: company.trim() || undefined,
+            address: address.trim() || undefined,
+            city: city.trim() || undefined,
+            state: state.trim() || undefined,
+            status,
+            notes: notes.trim() || undefined,
+          }
+
+          return {
+            rowIndex,
+            data,
+            raw: row,
+            isValid: errors.length === 0,
+            errors,
+            isUpdate: !!existing,
+            existingRecordName: existing?.name,
+          }
+        }}
+        onConfirmImport={async (validItems) => {
+          let imported = 0
+          let updated = 0
+          let ignored = 0
+
+          for (const item of validItems) {
+            try {
+              if (item.isUpdate && item.data.id) {
+                await clientsService.update(item.data.id, item.data)
+                updated++
+              } else {
+                const payload = { ...item.data, created_by: user?.id }
+                delete payload.id
+                await clientsService.create(payload)
+                imported++
+              }
+            } catch (err) {
+              console.error('Falha ao importar linha:', item.rowIndex, err)
+              ignored++
+            }
+          }
+
+          return { imported, updated, ignored }
+        }}
+        onSuccess={() => {
+          loadData()
+        }}
+      />
     </div>
   )
 }

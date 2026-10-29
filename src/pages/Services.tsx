@@ -15,7 +15,14 @@ import {
   XCircle,
   Tag,
   Briefcase,
+  FileSpreadsheet,
 } from 'lucide-react'
+import {
+  ImportSpreadsheetModal,
+  type ImportColumnDefinition,
+  type ImportPreviewItem,
+} from '@/components/ImportSpreadsheetModal'
+import { normalizeHeader } from '@/lib/csvImportUtils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -38,6 +45,9 @@ export default function ServicesPage() {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('all')
+
+  // Modal Importação
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false)
 
   // Modal Criar / Editar Serviço
   const [isModalOpen, setIsModalOpen] = useState(false)
@@ -196,9 +206,18 @@ export default function ServicesPage() {
             Cadastre consultorias, manutenções, implantações e cobranças via NFS-e municipal.
           </p>
         </div>
-        <Button onClick={handleOpenCreate} className="bg-blue-600 hover:bg-blue-700">
-          <Plus className="h-4 w-4 mr-1.5" /> Novo Serviço
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => setIsImportModalOpen(true)}
+            className="border-slate-300 text-slate-700 hover:bg-slate-50"
+          >
+            <FileSpreadsheet className="h-4 w-4 mr-1.5 text-emerald-600" /> Importar Serviços
+          </Button>
+          <Button onClick={handleOpenCreate} className="bg-blue-600 hover:bg-blue-700">
+            <Plus className="h-4 w-4 mr-1.5" /> Novo Serviço
+          </Button>
+        </div>
       </div>
 
       {/* Busca e Filtro */}
@@ -442,6 +461,150 @@ export default function ServicesPage() {
           </form>
         </DialogContent>
       </Dialog>
+
+      {/* MODAL DE IMPORTAÇÃO DE SERVIÇOS */}
+      <ImportSpreadsheetModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        title="Importar Catálogo de Serviços"
+        entityName="serviços"
+        templateFileName="modelo_importacao_servicos.csv"
+        columns={[
+          { key: 'name', label: 'Nome do Serviço', required: true },
+          { key: 'description', label: 'Descrição' },
+          { key: 'price', label: 'Preço (R$)' },
+          { key: 'duration_minutes', label: 'Duração (Minutos)' },
+          { key: 'category', label: 'Categoria' },
+          { key: 'active', label: 'Ativo (sim/não)' },
+        ]}
+        sampleData={[
+          [
+            'Consultoria em Gestão Financeira',
+            'Diagnóstico completo e planejamento de fluxo de caixa',
+            '1500.00',
+            '120',
+            'Consultoria',
+            'sim',
+          ],
+          [
+            'Implantação de Software CRM',
+            'Treinamento da equipe e parametrização do sistema',
+            '2800.00',
+            '240',
+            'Implantação',
+            'sim',
+          ],
+          [
+            'Manutenção Preventiva de TI',
+            'Backup de banco de dados e checagem de servidores',
+            '450.00',
+            '60',
+            'Suporte Técnico',
+            'sim',
+          ],
+        ]}
+        processRow={(row, rowIndex) => {
+          const normalized: Record<string, string> = {}
+          for (const [k, v] of Object.entries(row)) {
+            normalized[normalizeHeader(k)] = v
+          }
+
+          const name =
+            normalized['nome'] ||
+            normalized['nome do servico'] ||
+            normalized['servico'] ||
+            normalized['titulo'] ||
+            ''
+
+          const description = normalized['descricao'] || normalized['detalhes'] || ''
+          const rawPrice =
+            normalized['preco'] ||
+            normalized['preco (r$)'] ||
+            normalized['valor'] ||
+            normalized['preco padrao'] ||
+            '0'
+          const rawDuration =
+            normalized['duracao'] ||
+            normalized['duracao (minutos)'] ||
+            normalized['minutos'] ||
+            normalized['tempo'] ||
+            '60'
+          const category = normalized['categoria'] || ''
+          const rawActive = (
+            normalized['ativo'] ||
+            normalized['ativo (sim/nao)'] ||
+            'sim'
+          ).toLowerCase()
+
+          const price = parseFloat(rawPrice.replace(/[^\d.,-]/g, '').replace(',', '.')) || 0
+          const duration = parseInt(rawDuration.replace(/\D/g, ''), 10) || 60
+          const active =
+            !rawActive.includes('nao') &&
+            !rawActive.includes('não') &&
+            !rawActive.includes('false') &&
+            !rawActive.includes('0')
+
+          const errors: string[] = []
+          if (!name.trim()) {
+            errors.push('Nome do serviço é obrigatório')
+          }
+          if (price < 0) {
+            errors.push('Preço não pode ser negativo')
+          }
+
+          // Upsert se serviço com mesmo nome já existe
+          const existing = services.find(
+            (s) => s.name && s.name.trim().toLowerCase() === name.trim().toLowerCase(),
+          )
+
+          const data: Partial<Service> = {
+            id: existing?.id,
+            name: name.trim(),
+            description: description.trim() || undefined,
+            price,
+            duration_minutes: duration,
+            category: category.trim() || undefined,
+            active,
+          }
+
+          return {
+            rowIndex,
+            data,
+            raw: row,
+            isValid: errors.length === 0,
+            errors,
+            isUpdate: !!existing,
+            existingRecordName: existing?.name,
+          }
+        }}
+        onConfirmImport={async (validItems) => {
+          let imported = 0
+          let updated = 0
+          let ignored = 0
+
+          for (const item of validItems) {
+            try {
+              if (item.isUpdate && item.data.id) {
+                await servicesCatalogService.update(item.data.id, item.data)
+                updated++
+              } else {
+                const payload = { ...item.data, created_by: user?.id }
+                delete payload.id
+                await servicesCatalogService.create(payload)
+                imported++
+              }
+            } catch (err) {
+              console.error('Falha ao importar serviço:', item.rowIndex, err)
+              ignored++
+            }
+          }
+
+          return { imported, updated, ignored }
+        }}
+        onSuccess={() => {
+          loadServices()
+        }}
+      />
     </div>
   )
 }

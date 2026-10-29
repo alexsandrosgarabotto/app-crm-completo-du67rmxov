@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-29T21:23:24.197Z",
+  "generatedAt": "2026-10-29T23:04:01.747Z",
   "collections": [
     {
       "name": "users",
@@ -1076,6 +1076,91 @@
         }
       ],
       "indexes": []
+    },
+    {
+      "name": "fixed_costs",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != '' && (@request.auth.role = 'owner' || created_by = @request.auth.id)",
+        "view": "@request.auth.id != '' && (@request.auth.role = 'owner' || created_by = @request.auth.id)",
+        "create": "@request.auth.id != ''",
+        "update": "@request.auth.id != '' && (@request.auth.role = 'owner' || created_by = @request.auth.id)",
+        "delete": "@request.auth.id != '' && @request.auth.role = 'owner'"
+      },
+      "fields": [
+        {
+          "name": "name",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "category",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": [
+            "salarios",
+            "aluguel",
+            "energia",
+            "agua",
+            "internet",
+            "telefone",
+            "marketing",
+            "contabilidade",
+            "outros"
+          ]
+        },
+        {
+          "name": "amount",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "due_day",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "active",
+          "type": "bool",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "notes",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created_by",
+          "type": "relation",
+          "required": false,
+          "system": false,
+          "collectionRef": "users"
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_fixed_costs_active ON fixed_costs (active)",
+        "CREATE INDEX idx_fixed_costs_category ON fixed_costs (category)"
+      ]
     }
   ]
 }

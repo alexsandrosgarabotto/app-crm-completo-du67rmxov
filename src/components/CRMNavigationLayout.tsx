@@ -18,6 +18,7 @@ import {
   Building2,
   ShieldCheck,
   UserCheck,
+  DollarSign,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
@@ -43,6 +44,7 @@ export default function CRMNavigationLayout() {
     { title: 'Notas Fiscais', path: '/notas-fiscais', icon: Receipt },
     { title: 'Agenda & Tarefas', path: '/agenda', icon: CalendarCheck },
     { title: 'Financeiro', path: '/financeiro', icon: ReceiptText },
+    { title: 'Custos Fixos', path: '/financeiro?aba=custos-fixos', icon: DollarSign },
     { title: 'Relatórios', path: '/relatorios', icon: BarChart3 },
     ...(user?.role === 'owner'
       ? [{ title: 'Configurações & Equipe', path: '/configuracoes', icon: Settings }]
@@ -80,14 +82,19 @@ export default function CRMNavigationLayout() {
               <NavLink
                 key={item.path}
                 to={item.path}
-                className={({ isActive }) =>
-                  cn(
+                end={item.path === '/financeiro'}
+                className={({ isActive }) => {
+                  const currentFull = window.location.pathname + window.location.search
+                  const isItemActive = item.path.includes('?')
+                    ? currentFull === item.path
+                    : isActive && !window.location.search.includes('aba=custos-fixos')
+                  return cn(
                     'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
-                    isActive
+                    isItemActive
                       ? 'bg-blue-50 text-blue-700 font-semibold shadow-xs'
                       : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900',
                   )
-                }
+                }}
               >
                 <Icon className="h-4 w-4 shrink-0" />
                 <span>{item.title}</span>
@@ -191,15 +198,20 @@ export default function CRMNavigationLayout() {
                     <NavLink
                       key={item.path}
                       to={item.path}
+                      end={item.path === '/financeiro'}
                       onClick={() => setMobileOpen(false)}
-                      className={({ isActive }) =>
-                        cn(
+                      className={({ isActive }) => {
+                        const currentFull = window.location.pathname + window.location.search
+                        const isItemActive = item.path.includes('?')
+                          ? currentFull === item.path
+                          : isActive && !window.location.search.includes('aba=custos-fixos')
+                        return cn(
                           'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
-                          isActive
+                          isItemActive
                             ? 'bg-blue-50 text-blue-700 font-semibold'
                             : 'text-slate-600 hover:bg-slate-50',
                         )
-                      }
+                      }}
                     >
                       <Icon className="h-4 w-4 shrink-0" />
                       <span>{item.title}</span>
