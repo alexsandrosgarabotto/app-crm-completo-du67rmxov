@@ -10,6 +10,7 @@ import {
   Receipt,
   CalendarCheck,
   ReceiptText,
+  BarChart3,
   Settings,
   LogOut,
   Menu,
@@ -42,6 +43,7 @@ export default function CRMNavigationLayout() {
     { title: 'Notas Fiscais', path: '/notas-fiscais', icon: Receipt },
     { title: 'Agenda & Tarefas', path: '/agenda', icon: CalendarCheck },
     { title: 'Financeiro', path: '/financeiro', icon: ReceiptText },
+    { title: 'Relatórios', path: '/relatorios', icon: BarChart3 },
     ...(user?.role === 'owner'
       ? [{ title: 'Configurações & Equipe', path: '/configuracoes', icon: Settings }]
       : []),

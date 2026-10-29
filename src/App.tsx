@@ -19,6 +19,7 @@ import SettingsPage from './pages/Settings'
 import StockPage from './pages/Stock'
 import ServicesPage from './pages/Services'
 import FiscalDocumentsPage from './pages/FiscalDocuments'
+import ReportsPage from './pages/Reports'
 import NotFound from './pages/NotFound'
 
 const App = () => (
@@ -51,6 +52,7 @@ const App = () => (
             <Route path="/notas-fiscais" element={<FiscalDocumentsPage />} />
             <Route path="/agenda" element={<ScheduleTasksPage />} />
             <Route path="/financeiro" element={<FinancialPage />} />
+            <Route path="/relatorios" element={<ReportsPage />} />
             <Route
               path="/configuracoes"
               element={

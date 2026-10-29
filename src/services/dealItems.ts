@@ -2,6 +2,13 @@ import pb from '@/lib/pocketbase/client'
 import type { DealItem } from '@/types/crm'
 
 export const dealItemsService = {
+  async getAll(): Promise<DealItem[]> {
+    return await pb.collection('deal_items').getFullList<DealItem>({
+      sort: '-created',
+      expand: 'product_id,service_id',
+    })
+  },
+
   async getByDealId(dealId: string): Promise<DealItem[]> {
     return await pb.collection('deal_items').getFullList<DealItem>({
       filter: `deal_id = "${dealId}"`,
