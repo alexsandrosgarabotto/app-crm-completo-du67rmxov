@@ -110,14 +110,41 @@ sudo certbot --nginx -d crm.seudominio.com -d api.seudominio.com
 Para levar os clientes, negócios, produtos, faturas e configurações que já estão cadastrados:
 
 ### 1. No seu computador local, exporte os dados da Skip Cloud:
+
+Você pode exportar de duas formas:
+
+#### Opção A (Recomendada): Usando o token de sessão do navegador (`PB_TOKEN`)
+Se você já está logado no CRM pelo navegador, você não precisa digitar senha no terminal (evitando problemas com caracteres especiais como `$` e `@` no PowerShell).
+
+1. Abra o CRM no seu navegador (onde você já está logado).
+2. Pressione **F12** (ou clique com botão direito > **Inspecionar**).
+3. Vá para a aba **Application** (ou **Armazenamento**, em navegadores em português).
+4. No menu lateral esquerdo, expanda **Local Storage** e clique na URL do CRM.
+5. Procure pela chave `pocketbase_auth`.
+6. Copie o valor do campo `"token"` (uma sequência longa começando com `eyJ...`).
+7. No PowerShell, execute:
 ```powershell
 # Instale as dependências se ainda não instalou
 npm install
 
-# Execute a exportação (puxa todos os registros das coleções para a pasta data-backup/)
+# Configure a URL do backend de origem (se diferente do padrão) e o token de sessão:
+$env:PB_URL = "https://app-crm-completo-7ca4b.shrd01.internal.goskip.dev"
+$env:PB_TOKEN = "cole_aqui_o_token_copiado_do_localstorage"
+
+# Execute a exportação
 node scripts/export-crm-data.mjs
 ```
-*Se você tiver login e senha de superuser da instância de origem, passe como parâmetros:*
+O script detectará o token, validará sua sessão e exportará todos os registros autorizados para a pasta `data-backup/`.
+
+#### Opção B: Usando e-mail e senha
+Caso prefira autenticar diretamente por e-mail e senha:
+```powershell
+$env:PB_URL = "https://app-crm-completo-7ca4b.shrd01.internal.goskip.dev"
+$env:PB_EMAIL = "seu_email@empresa.com"
+$env:PB_PASSWORD = "suasenha"
+node scripts/export-crm-data.mjs
+```
+*Ou passando diretamente por parâmetros:*
 ```powershell
 node scripts/export-crm-data.mjs https://app-crm-completo-7ca4b.shrd01.internal.goskip.dev seu_email sua_senha
 ```
