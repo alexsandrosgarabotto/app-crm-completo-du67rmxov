@@ -1,7 +1,10 @@
 /**
- * Utilitário leve de parsing e geração de planilhas CSV e XLSX compatível (formato CSV/TSV e XML Spreadsheet).
- * Não depende de bibliotecas externas pesadas e suporta .csv, .txt, .tsv e exportação .csv e .xlsx (XML Spreadsheet).
+ * Utilitário leve e robusto de parsing e geração de planilhas CSV e XLSX compatível.
+ * Suporta arquivos .xlsx nativos reais (descompactação ZIP OpenXML via DecompressionStream),
+ * planilhas XML Spreadsheet 2003 (.xml / .xls / .xlsx exportados) e arquivos delimitados (.csv, .tsv, .txt).
  */
+
+import { parseXLSXFile } from './xlsxReader'
 
 export interface ParsedSheetData {
   headers: string[]
@@ -17,6 +20,61 @@ export function normalizeHeader(h: string): string {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .trim()
+}
+
+/**
+ * Faz parse de planilhas no formato XML Spreadsheet 2003 (usado por sistemas legados com extensão .xlsx ou .xls)
+ */
+export function parseExcelXMLSpreadsheet(xml: string): ParsedSheetData {
+  const rowRegex = /<Row\b[^>]*>([\s\S]*?)<\/Row>/gi
+  const rowsData: string[][] = []
+  let rowMatch: RegExpExecArray | null
+
+  while ((rowMatch = rowRegex.exec(xml)) !== null) {
+    const rowContent = rowMatch[1]
+    const cellRegex = /<Cell\b[^>]*>([\s\S]*?)<\/Cell>/gi
+    const rowCells: string[] = []
+    let cellMatch: RegExpExecArray | null
+
+    while ((cellMatch = cellRegex.exec(rowContent)) !== null) {
+      const cellContent = cellMatch[1]
+      const dataMatch = /<Data\b[^>]*>([\s\S]*?)<\/Data>/i.exec(cellContent)
+      let val = ''
+      if (dataMatch) {
+        val = dataMatch[1]
+          .replace(/&amp;/g, '&')
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&quot;/g, '"')
+          .replace(/&apos;/g, "'")
+          .trim()
+      }
+      rowCells.push(val)
+    }
+
+    if (rowCells.some((c) => c !== '')) {
+      rowsData.push(rowCells)
+    }
+  }
+
+  if (rowsData.length === 0) {
+    return { headers: [], rows: [] }
+  }
+
+  const headers = rowsData[0]
+  const rows: Record<string, string>[] = []
+
+  for (let i = 1; i < rowsData.length; i++) {
+    const rowCells = rowsData[i]
+    if (rowCells.every((c) => !c)) continue
+    const rowObj: Record<string, string> = {}
+    headers.forEach((header, idx) => {
+      rowObj[header] = rowCells[idx] !== undefined ? rowCells[idx] : ''
+    })
+    rows.push(rowObj)
+  }
+
+  return { headers, rows }
 }
 
 /**
@@ -90,36 +148,73 @@ export function parseCSV(content: string): ParsedSheetData {
 }
 
 /**
- * Parse básico para arquivos .xlsx que possam vir como texto ou tentar ler de XML / ArrayBuffer
+ * Parse universal de planilhas para arquivos .xlsx, .csv, .tsv, .txt e planilhas XML
  */
 export async function parseSpreadsheetFile(file: File): Promise<ParsedSheetData> {
-  const isCSV =
-    file.name.endsWith('.csv') || file.name.endsWith('.txt') || file.name.endsWith('.tsv')
+  const lowerName = file.name.toLowerCase()
+  const isCsvOrTsv =
+    lowerName.endsWith('.csv') ||
+    lowerName.endsWith('.tsv') ||
+    lowerName.endsWith('.txt') ||
+    file.type === 'text/csv' ||
+    file.type === 'text/tab-separated-values' ||
+    file.type === 'text/plain'
 
-  if (isCSV) {
+  if (isCsvOrTsv) {
     const text = await file.text()
     return parseCSV(text)
   }
 
-  // Se for .xlsx, podemos ler como ArrayBuffer ou tentar descompactar caso precise,
-  // ou tentar decodificar se for XML ou se tiver SheetJS no ambiente.
-  // Como padrão no navegador sem deps grandes, tenta ler texto caso seja CSV renomeado ou arquivo estruturado.
+  // Tenta ler como arquivo binário .xlsx (ZIP OpenXML)
+  const arrayBuffer = await file.arrayBuffer()
+  const bytes = new Uint8Array(arrayBuffer)
+
+  // Verifica se inicia com a assinatura de arquivo ZIP (PK.. => 0x50, 0x4B, 0x03, 0x04)
+  const isZip = bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b
+
+  if (isZip) {
+    try {
+      const result = await parseXLSXFile(arrayBuffer)
+      if (result.headers.length > 0) {
+        return result
+      }
+    } catch (xlsxErr: any) {
+      console.warn('Falha no leitor de arquivo XLSX OpenXML:', xlsxErr)
+      // Caso ocorra falha ao descompactar como OpenXML, continua tentando outros formatos de contingência
+    }
+  }
+
+  // Se não for ZIP ou o parser falhou, pode ser:
+  // 1. Um arquivo CSV ou TSV renomeado para .xlsx
+  // 2. Um arquivo XML Spreadsheet 2003 salvo como .xlsx ou .xls
+  // 3. Texto codificado em UTF-8 ou ISO-8859-1
   try {
-    const text = await file.text()
+    const textDecoder = new TextDecoder('utf-8')
+    const text = textDecoder.decode(bytes)
+
+    // Se contiver tags XML Spreadsheet (<Workbook e <Row)
+    if (text.includes('<Workbook') && text.includes('<Row')) {
+      return parseExcelXMLSpreadsheet(text)
+    }
+
+    // Se contiver delimitadores CSV/TSV
     if (text.includes(',') || text.includes(';') || text.includes('\t')) {
-      return parseCSV(text)
+      const parsed = parseCSV(text)
+      if (parsed.headers.length > 0 && parsed.rows.length > 0) {
+        return parsed
+      }
     }
   } catch (_) {
-    // ignora
+    // ignora e propaga erro formatado abaixo
   }
 
   throw new Error(
-    'Formato de arquivo não reconhecido ou compactado. Por favor, utilize o modelo em planilha CSV ou texto (.csv ou .tsv).',
+    'Não foi possível extrair os dados da planilha. Verifique se o arquivo .xlsx ou .csv não está corrompido ou protegido por senha.',
   )
 }
 
 /**
- * Faz download de um arquivo gerado no navegador
+ * Faz download de um arquivo gerado no navegador a partir de texto
  */
 export function downloadFile(
   content: string,
@@ -127,6 +222,13 @@ export function downloadFile(
   mimeType: string = 'text/csv;charset=utf-8;',
 ) {
   const blob = new Blob([content], { type: mimeType })
+  downloadBlobFile(blob, fileName)
+}
+
+/**
+ * Faz download de um Blob no navegador
+ */
+export function downloadBlobFile(blob: Blob, fileName: string) {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
@@ -154,4 +256,62 @@ export function generateCSV(headers: string[], sampleRows: (string | number)[][]
   const dataLines = sampleRows.map((row) => row.map(escapeCell).join(';'))
 
   return bom + [headerLine, ...dataLines].join('\r\n')
+}
+
+/**
+ * Gera arquivo XML Spreadsheet 2003 nativo e compatível com Microsoft Excel
+ */
+export function generateExcelXML(
+  sheetName: string,
+  headers: string[],
+  sampleRows: (string | number)[][],
+): string {
+  const escapeXml = (str: string | number) =>
+    String(str ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;')
+
+  const headerCells = headers
+    .map(
+      (h) => `    <Cell ss:StyleID="Header"><Data ss:Type="String">${escapeXml(h)}</Data></Cell>`,
+    )
+    .join('\n')
+
+  const rowCells = sampleRows
+    .map((row) => {
+      const cells = row
+        .map((c) => `    <Cell><Data ss:Type="String">${escapeXml(c)}</Data></Cell>`)
+        .join('\n')
+      return `   <Row>\n${cells}\n   </Row>`
+    })
+    .join('\n')
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:html="http://www.w3.org/TR/REC-html40">
+ <Styles>
+  <Style ss:ID="Default" ss:Name="Normal">
+   <Alignment ss:Vertical="Bottom"/>
+  </Style>
+  <Style ss:ID="Header">
+   <Font ss:Bold="1" ss:Color="#FFFFFF"/>
+   <Interior ss:Color="#2563EB" ss:Pattern="Solid"/>
+  </Style>
+ </Styles>
+ <Worksheet ss:Name="${escapeXml(sheetName.substring(0, 31))}">
+  <Table>
+   <Row>
+${headerCells}
+   </Row>
+${rowCells}
+  </Table>
+ </Worksheet>
+</Workbook>`
 }

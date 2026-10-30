@@ -23,7 +23,9 @@ import {
 import {
   parseSpreadsheetFile,
   downloadFile,
+  downloadBlobFile,
   generateCSV,
+  generateExcelXML,
   type ParsedSheetData,
 } from '@/lib/csvImportUtils'
 
@@ -82,14 +84,27 @@ export function ImportSpreadsheetModal<T>({
   const [previewItems, setPreviewItems] = useState<ImportPreviewItem<T>[]>([])
   const [hasParsed, setHasParsed] = useState(false)
 
-  const handleDownloadTemplate = () => {
+  const handleDownloadTemplate = (format: 'csv' | 'xlsx' = 'csv') => {
     const headers = columns.map((c) => c.label)
-    const csvContent = generateCSV(headers, sampleData)
-    downloadFile(csvContent, templateFileName)
-    toast({
-      title: 'Modelo baixado!',
-      description: `Arquivo ${templateFileName} pronto para preenchimento no Excel.`,
-    })
+    const baseName = templateFileName.replace(/\.(csv|xlsx|xls)$/i, '')
+
+    if (format === 'xlsx') {
+      const fileName = `${baseName}.xls`
+      const xmlContent = generateExcelXML(title, headers, sampleData)
+      downloadFile(xmlContent, fileName, 'application/vnd.ms-excel;charset=utf-8;')
+      toast({
+        title: 'Modelo Excel baixado!',
+        description: `Arquivo ${fileName} pronto para preenchimento no Excel ou planilhas.`,
+      })
+    } else {
+      const fileName = `${baseName}.csv`
+      const csvContent = generateCSV(headers, sampleData)
+      downloadFile(csvContent, fileName, 'text/csv;charset=utf-8;')
+      toast({
+        title: 'Modelo CSV baixado!',
+        description: `Arquivo ${fileName} pronto para preenchimento.`,
+      })
+    }
   }
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -201,14 +216,24 @@ export function ImportSpreadsheetModal<T>({
                 Preencha e salve como .csv ou .xlsx para importar com facilidade.
               </p>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleDownloadTemplate}
-              className="bg-white hover:bg-blue-100 text-blue-700 border-blue-200 text-xs shrink-0"
-            >
-              <Download className="h-3.5 w-3.5 mr-1.5" /> Baixar Modelo (.csv / Excel)
-            </Button>
+            <div className="flex items-center gap-2 shrink-0">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleDownloadTemplate('xlsx')}
+                className="bg-white hover:bg-blue-100 text-blue-700 border-blue-200 text-xs"
+              >
+                <Download className="h-3.5 w-3.5 mr-1.5" /> Baixar Modelo Excel (.xls/.xlsx)
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleDownloadTemplate('csv')}
+                className="bg-white hover:bg-slate-100 text-slate-700 border-slate-200 text-xs"
+              >
+                <Download className="h-3.5 w-3.5 mr-1.5" /> Baixar (.csv)
+              </Button>
+            </div>
           </div>
 
           {/* Seção 2: Upload de Arquivo */}
