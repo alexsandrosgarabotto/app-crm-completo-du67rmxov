@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-29T23:04:01.747Z",
+  "generatedAt": "2026-10-30T11:05:57.241Z",
   "collections": [
     {
       "name": "users",
@@ -1160,6 +1160,96 @@
       "indexes": [
         "CREATE INDEX idx_fixed_costs_active ON fixed_costs (active)",
         "CREATE INDEX idx_fixed_costs_category ON fixed_costs (category)"
+      ]
+    },
+    {
+      "name": "cash_movements",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != '' && (@request.auth.role = 'owner' || created_by = @request.auth.id)",
+        "view": "@request.auth.id != '' && (@request.auth.role = 'owner' || created_by = @request.auth.id)",
+        "create": "@request.auth.id != ''",
+        "update": "@request.auth.id != '' && (@request.auth.role = 'owner' || created_by = @request.auth.id)",
+        "delete": "@request.auth.id != '' && (@request.auth.role = 'owner' || created_by = @request.auth.id)"
+      },
+      "fields": [
+        {
+          "name": "date",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "type",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": ["entry", "exit"]
+        },
+        {
+          "name": "description",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "category",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "amount",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "payment_method",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": ["dinheiro", "pix", "cartao", "transferencia", "boleto", "outros"]
+        },
+        {
+          "name": "invoice_id",
+          "type": "relation",
+          "required": false,
+          "system": false,
+          "collectionRef": "invoices"
+        },
+        {
+          "name": "created_by",
+          "type": "relation",
+          "required": false,
+          "system": false,
+          "collectionRef": "users"
+        },
+        {
+          "name": "notes",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_cash_movements_date ON cash_movements (date)",
+        "CREATE INDEX idx_cash_movements_type ON cash_movements (type)",
+        "CREATE INDEX idx_cash_movements_invoice ON cash_movements (invoice_id)"
       ]
     }
   ]

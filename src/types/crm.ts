@@ -274,3 +274,32 @@ export interface FixedCost {
     created_by?: User
   }
 }
+
+// ================= CONTROLE DE CAIXA =================
+export type CashMovementType = 'entry' | 'exit'
+export type CashPaymentMethod =
+  | 'dinheiro'
+  | 'pix'
+  | 'cartao'
+  | 'transferencia'
+  | 'boleto'
+  | 'outros'
+
+export interface CashMovement {
+  id: string
+  date: string // YYYY-MM-DD
+  type: CashMovementType
+  description: string
+  category?: string
+  amount: number
+  payment_method: CashPaymentMethod
+  invoice_id?: string
+  created_by?: string
+  notes?: string
+  created: string
+  updated: string
+  expand?: {
+    invoice_id?: Invoice
+    created_by?: User
+  }
+}

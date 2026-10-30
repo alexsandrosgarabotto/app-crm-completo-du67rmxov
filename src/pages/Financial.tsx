@@ -5,6 +5,8 @@ import { invoicesService } from '@/services/invoices'
 import { clientsService } from '@/services/clients'
 import { dealsService } from '@/services/deals'
 import { fixedCostsService } from '@/services/fixedCosts'
+import { cashMovementsService } from '@/services/cashMovements'
+import CashControlView from '@/components/CashControlView'
 import type {
   Invoice,
   InvoiceType,
@@ -13,6 +15,7 @@ import type {
   Deal,
   FixedCost,
   FixedCostCategory,
+  CashMovement,
 } from '@/types/crm'
 import {
   ReceiptText,
@@ -58,11 +61,19 @@ export default function FinancialPage() {
 
   const [searchParams, setSearchParams] = useSearchParams()
 
-  // Aba principal: Faturas (contas a receber / pagar) ou Custos Fixos Mensais
+  // Aba principal: Faturas (contas a receber / pagar), Custos Fixos Mensais ou Caixa
   const currentTabParam = searchParams.get('aba')
-  const [mainView, setMainView] = useState<'invoices' | 'fixed_costs'>(
-    currentTabParam === 'custos-fixos' ? 'fixed_costs' : 'invoices',
+  const [mainView, setMainView] = useState<'invoices' | 'fixed_costs' | 'cash'>(
+    currentTabParam === 'custos-fixos'
+      ? 'fixed_costs'
+      : currentTabParam === 'caixa'
+        ? 'cash'
+        : 'invoices',
   )
+
+  // Controle de Caixa State
+  const [cashMovements, setCashMovements] = useState<CashMovement[]>([])
+  const [loadingCash, setLoadingCash] = useState(false)
 
   // Custos Fixos State
   const [fixedCosts, setFixedCosts] = useState<FixedCost[]>([])
@@ -111,8 +122,14 @@ export default function FinancialPage() {
     const tab = searchParams.get('aba')
     if (tab === 'custos-fixos') {
       setMainView('fixed_costs')
-    } else if (!tab && mainView === 'fixed_costs' && currentTabParam === null) {
-      // mantém
+    } else if (tab === 'caixa') {
+      setMainView('cash')
+    } else if (
+      !tab &&
+      (mainView === 'fixed_costs' || mainView === 'cash') &&
+      currentTabParam === null
+    ) {
+      setMainView('invoices')
     }
   }, [searchParams])
 
@@ -123,16 +140,18 @@ export default function FinancialPage() {
   const loadData = async () => {
     setLoading(true)
     try {
-      const [invData, clientsData, dealsData, costsData] = await Promise.all([
+      const [invData, clientsData, dealsData, costsData, cashData] = await Promise.all([
         invoicesService.getAll(),
         clientsService.getAll(),
         dealsService.getAll(),
         fixedCostsService.getAll(),
+        cashMovementsService.getAll(),
       ])
       setInvoices(invData)
       setClients(clientsData)
       setDeals(dealsData)
       setFixedCosts(costsData)
+      setCashMovements(cashData)
     } catch (err) {
       console.error('Erro ao carregar dados financeiros:', err)
       toast({
@@ -241,17 +260,70 @@ export default function FinancialPage() {
   const handleTogglePaid = async (inv: Invoice) => {
     const nextStatus: InvoiceStatus = inv.status === 'paid' ? 'pending' : 'paid'
     try {
-      setInvoices((prev) => prev.map((i) => (i.id === inv.id ? { ...i, status: nextStatus } : i)))
-      await invoicesService.updateStatus(inv.id, nextStatus)
+      setInvoices((prev) =>
+        prev.map((i) =>
+          i.id === inv.id
+            ? {
+                ...i,
+                status: nextStatus,
+                paid_date: nextStatus === 'paid' ? new Date().toISOString().split('T')[0] : '',
+              }
+            : i,
+        ),
+      )
+      const updated = await invoicesService.updateStatus(inv.id, nextStatus)
+      // Atualiza o estado das faturas e recarrega os movimentos do caixa para refletir a sincronização imediata
+      const cashData = await cashMovementsService.getAll()
+      setCashMovements(cashData)
       toast({
         title: nextStatus === 'paid' ? 'Marcada como Paga!' : 'Marcada como Pendente',
-        description: inv.description,
+        description: `${inv.description} ${nextStatus === 'paid' ? '(Lançamento refletido no Caixa)' : ''}`,
       })
     } catch {
       setInvoices((prev) => prev.map((i) => (i.id === inv.id ? { ...i, status: inv.status } : i)))
       toast({
         title: 'Erro',
         description: 'Não foi possível alterar a fatura.',
+        variant: 'destructive',
+      })
+    }
+  }
+
+  // Handlers do Controle de Caixa
+  const handleSaveCashMovement = async (data: Partial<CashMovement>, id?: string) => {
+    try {
+      if (id) {
+        const updated = await cashMovementsService.update(id, data)
+        setCashMovements((prev) => prev.map((m) => (m.id === updated.id ? updated : m)))
+        toast({ title: 'Sucesso', description: 'Movimento de caixa atualizado!' })
+      } else {
+        const created = await cashMovementsService.create({
+          ...data,
+          created_by: user?.id,
+        })
+        setCashMovements((prev) => [created, ...prev])
+        toast({ title: 'Sucesso', description: 'Movimento registrado no caixa!' })
+      }
+    } catch (err: any) {
+      toast({
+        title: 'Erro',
+        description: err.message || 'Falha ao salvar movimento no caixa.',
+        variant: 'destructive',
+      })
+      throw err
+    }
+  }
+
+  const handleDeleteCashMovement = async (id: string) => {
+    if (!window.confirm('Tem certeza que deseja excluir esta movimentação de caixa?')) return
+    try {
+      await cashMovementsService.delete(id)
+      setCashMovements((prev) => prev.filter((m) => m.id !== id))
+      toast({ title: 'Excluído', description: 'Movimentação removida do caixa.' })
+    } catch (err) {
+      toast({
+        title: 'Erro',
+        description: 'Não foi possível excluir a movimentação.',
         variant: 'destructive',
       })
     }
@@ -503,6 +575,8 @@ export default function FinancialPage() {
           <h1 className="text-2xl md:text-3xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
             {mainView === 'fixed_costs' ? (
               <DollarSign className="h-7 w-7 text-amber-600" />
+            ) : mainView === 'cash' ? (
+              <DollarSign className="h-7 w-7 text-emerald-600" />
             ) : (
               <ReceiptText className="h-7 w-7 text-blue-600" />
             )}
@@ -511,7 +585,9 @@ export default function FinancialPage() {
           <p className="text-sm text-slate-500 mt-1">
             {mainView === 'fixed_costs'
               ? 'Custos fixos mensais, folha de salários e despesas recorrentes da empresa.'
-              : 'Acompanhe contas a receber de vendas, contas a pagar da empresa e fluxo de caixa.'}
+              : mainView === 'cash'
+                ? 'Controle de caixa, movimentações em tempo real, suprimentos e sangrias.'
+                : 'Acompanhe contas a receber de vendas, contas a pagar da empresa e fluxo de caixa.'}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -519,7 +595,7 @@ export default function FinancialPage() {
             <Button onClick={handleOpenCreateCost} className="bg-amber-600 hover:bg-amber-700">
               <Plus className="h-4 w-4 mr-1.5" /> Novo Custo Fixo
             </Button>
-          ) : (
+          ) : mainView === 'cash' ? null : (
             <>
               <Button
                 onClick={() => handleOpenCreate('receivable')}
@@ -540,13 +616,13 @@ export default function FinancialPage() {
       </div>
 
       {/* Navegação entre Módulos Internos do Financeiro */}
-      <div className="flex border-b border-slate-200">
+      <div className="flex border-b border-slate-200 overflow-x-auto">
         <button
           onClick={() => {
             setMainView('invoices')
             setSearchParams({})
           }}
-          className={`px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px transition-colors flex items-center gap-2 ${
+          className={`px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px transition-colors flex items-center gap-2 whitespace-nowrap ${
             mainView === 'invoices'
               ? 'border-blue-600 text-blue-600'
               : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -555,12 +631,31 @@ export default function FinancialPage() {
           <ReceiptText className="h-4 w-4" />
           Faturas & Contas (Receber/Pagar)
         </button>
+
+        <button
+          onClick={() => {
+            setMainView('cash')
+            setSearchParams({ aba: 'caixa' })
+          }}
+          className={`px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px transition-colors flex items-center gap-2 whitespace-nowrap ${
+            mainView === 'cash'
+              ? 'border-emerald-600 text-emerald-700'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <DollarSign className="h-4 w-4" />
+          Caixa
+          <Badge className="ml-1 bg-emerald-100 text-emerald-800 text-[10px] px-1.5 py-0 border-0">
+            {cashMovements.length}
+          </Badge>
+        </button>
+
         <button
           onClick={() => {
             setMainView('fixed_costs')
             setSearchParams({ aba: 'custos-fixos' })
           }}
-          className={`px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px transition-colors flex items-center gap-2 ${
+          className={`px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px transition-colors flex items-center gap-2 whitespace-nowrap ${
             mainView === 'fixed_costs'
               ? 'border-amber-600 text-amber-700'
               : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -574,7 +669,16 @@ export default function FinancialPage() {
         </button>
       </div>
 
-      {mainView === 'fixed_costs' ? (
+      {mainView === 'cash' ? (
+        /* ================= ABA CONTROLE DE CAIXA ================= */
+        <CashControlView
+          movements={cashMovements}
+          loading={loading}
+          onSaveMovement={handleSaveCashMovement}
+          onDeleteMovement={handleDeleteCashMovement}
+          formatCurrency={formatCurrency}
+        />
+      ) : mainView === 'fixed_costs' ? (
         /* ================= ABA CUSTOS FIXOS MENSAIS ================= */
         <div className="space-y-6">
           {/* Cards de Resumo Custos Fixos */}

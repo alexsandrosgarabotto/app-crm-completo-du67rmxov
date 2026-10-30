@@ -19,6 +19,7 @@ import {
   ShieldCheck,
   UserCheck,
   DollarSign,
+  Wallet,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
@@ -44,6 +45,7 @@ export default function CRMNavigationLayout() {
     { title: 'Notas Fiscais', path: '/notas-fiscais', icon: Receipt },
     { title: 'Agenda & Tarefas', path: '/agenda', icon: CalendarCheck },
     { title: 'Financeiro', path: '/financeiro', icon: ReceiptText },
+    { title: 'Caixa', path: '/financeiro?aba=caixa', icon: Wallet },
     { title: 'Custos Fixos', path: '/financeiro?aba=custos-fixos', icon: DollarSign },
     { title: 'Relatórios', path: '/relatorios', icon: BarChart3 },
     ...(user?.role === 'owner'
@@ -87,7 +89,7 @@ export default function CRMNavigationLayout() {
                   const currentFull = window.location.pathname + window.location.search
                   const isItemActive = item.path.includes('?')
                     ? currentFull === item.path
-                    : isActive && !window.location.search.includes('aba=custos-fixos')
+                    : isActive && !window.location.search.includes('aba=')
                   return cn(
                     'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
                     isItemActive
@@ -204,7 +206,7 @@ export default function CRMNavigationLayout() {
                         const currentFull = window.location.pathname + window.location.search
                         const isItemActive = item.path.includes('?')
                           ? currentFull === item.path
-                          : isActive && !window.location.search.includes('aba=custos-fixos')
+                          : isActive && !window.location.search.includes('aba=')
                         return cn(
                           'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
                           isItemActive
