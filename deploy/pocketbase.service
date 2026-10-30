@@ -1,0 +1,19 @@
+[Unit]
+Description=PocketBase CRM Backend Service
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+LimitNOFILE=65536
+WorkingDirectory=/var/www/pocketbase
+ExecStart=/var/www/pocketbase/pocketbase serve --http="127.0.0.1:8090" --dir="/var/www/pocketbase/pb_data" --migrationsDir="/var/www/pocketbase/pb_migrations"
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pocketbase-crm
+
+[Install]
+WantedBy=multi-user.target
