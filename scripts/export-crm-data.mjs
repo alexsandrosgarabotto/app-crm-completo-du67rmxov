@@ -56,35 +56,73 @@ async function run() {
   pb.autoCancellation(false)
 
   // Autenticação
-  if (pbEmail && pbPassword) {
-    try {
-      console.log(`🔑 Tentando autenticar superuser: ${pbEmail}...`)
-      // PocketBase v0.23+ usa _superusers
-      if (pb.collection('_superusers')) {
-        try {
-          await pb.collection('_superusers').authWithPassword(pbEmail, pbPassword)
-          console.log('✅ Autenticado com sucesso como superuser via _superusers.')
-        } catch {
-          await pb.admins.authWithPassword(pbEmail, pbPassword)
-          console.log('✅ Autenticado com sucesso como superuser via admins.')
-        }
-      } else {
-        await pb.admins.authWithPassword(pbEmail, pbPassword)
-        console.log('✅ Autenticado com sucesso como superuser via admins.')
-      }
-    } catch (authErr) {
-      console.warn(
-        `⚠️ Não foi possível autenticar como superuser (${authErr.message}). Tentando leitura direta...`,
-      )
-    }
-  } else {
-    console.log(
-      'ℹ️ Nenhuma credencial de superuser fornecida. Continuando com leitura anônima/regras públicas...',
+  if (!pbEmail || !pbPassword) {
+    console.error('❌ Erro: Credenciais não fornecidas.')
+    console.error('   Informe e-mail e senha por argumentos ou variáveis de ambiente:')
+    console.error(
+      '   PB_EMAIL=usuario@empresa.com PB_PASSWORD=senha node scripts/export-crm-data.mjs',
     )
+    console.error('   ou: node scripts/export-crm-data.mjs [PB_URL] [EMAIL] [SENHA]')
+    process.exit(1)
+  }
+
+  let authenticated = false
+  let authMode = ''
+
+  // 1. Primeiro tentar autenticar como superuser (comportamento atual para quem tem superuser)
+  console.log(`🔑 Tentando autenticar como superuser: ${pbEmail}...`)
+  try {
+    if (typeof pb.collection === 'function') {
+      try {
+        await pb.collection('_superusers').authWithPassword(pbEmail, pbPassword)
+        authenticated = true
+        authMode = 'superuser (_superusers)'
+        console.log('✅ Autenticado com sucesso como superuser (via _superusers).')
+      } catch (errSuperusers) {
+        if (pb.admins && typeof pb.admins.authWithPassword === 'function') {
+          await pb.admins.authWithPassword(pbEmail, pbPassword)
+          authenticated = true
+          authMode = 'superuser (admins)'
+          console.log('✅ Autenticado com sucesso como superuser (via admins).')
+        } else {
+          throw errSuperusers
+        }
+      }
+    } else if (pb.admins && typeof pb.admins.authWithPassword === 'function') {
+      await pb.admins.authWithPassword(pbEmail, pbPassword)
+      authenticated = true
+      authMode = 'superuser (admins)'
+      console.log('✅ Autenticado com sucesso como superuser (via admins).')
+    }
+  } catch (superuserErr) {
     console.log(
-      '   (Dica: forneça email e senha para garantir que registros privados sejam exportados)',
+      `ℹ️ Autenticação como superuser não concluída (${superuserErr.message}). Tentando como usuário da aplicação (users)...`,
     )
   }
+
+  // 2. Se falhar, autenticar como usuário normal da coleção users (ex.: papel owner/seller)
+  if (!authenticated) {
+    try {
+      console.log(
+        `🔑 Tentando autenticar como usuário do sistema na coleção 'users': ${pbEmail}...`,
+      )
+      const authData = await pb.collection('users').authWithPassword(pbEmail, pbPassword)
+      authenticated = true
+      const userRole = authData?.record?.role || 'indefinido'
+      authMode = `usuário comum da aplicação (users, papel: ${userRole})`
+      console.log(`✅ Autenticado com sucesso como usuário da aplicação! (Papel: ${userRole})`)
+    } catch (userErr) {
+      // 3. Se ambas falharem, mensagem clara em português de que e-mail/senha estão incorretos e sair com erro
+      console.error('❌ Falha na autenticação: e-mail ou senha incorretos.')
+      console.error(`   Detalhes da tentativa superuser: erro de credenciais ou permissão.`)
+      console.error(`   Detalhes da tentativa usuário: ${userErr.message}`)
+      console.error('   Verifique o e-mail e senha informados e tente novamente.')
+      process.exit(1)
+    }
+  }
+
+  console.log(`🔒 Modo de autenticação ativo: ${authMode}`)
+  console.log(`🎫 Token de autenticação configurado para todas as requisições.`)
 
   if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true })
