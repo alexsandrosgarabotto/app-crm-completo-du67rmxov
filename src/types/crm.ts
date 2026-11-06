@@ -314,6 +314,64 @@ export interface WhatsAppMessage {
   }
 }
 
+// ================= ORDENS DE SERVIÇO =================
+export type ServiceOrderStatus =
+  | 'aberta'
+  | 'em_andamento'
+  | 'aguardando_peca'
+  | 'finalizada'
+  | 'cancelada'
+
+export interface ServiceOrderItem {
+  item_type: 'product' | 'service'
+  product_id?: string
+  service_id?: string
+  name_snapshot: string
+  quantity: number
+  unit_price: number
+  total_price: number
+}
+
+export interface ServiceOrder {
+  id: string
+  number: string
+  client_id: string
+  conversation_id?: string
+  status: ServiceOrderStatus
+  opened_at?: string
+  finished_at?: string
+  responsible_id?: string
+  problem_description?: string
+  notes?: string
+  items: ServiceOrderItem[]
+  total_value?: number
+  invoice_id?: string
+  stock_released?: boolean
+  created_by?: string
+  created: string
+  updated: string
+  expand?: {
+    client_id?: Client
+    responsible_id?: User
+    created_by?: User
+  }
+}
+
+export type WhatsAppTemplateKey = 'greeting' | 'menu'
+
+export interface WhatsAppTemplate {
+  id: string
+  key: WhatsAppTemplateKey
+  body: string
+  active?: boolean
+  updated_by?: string
+  created: string
+  updated: string
+  expand?: {
+    updated_by?: User
+  }
+}
+
 // ================= CONTROLE DE CAIXA =================
 export type CashMovementType = 'entry' | 'exit'
 export type CashPaymentMethod =

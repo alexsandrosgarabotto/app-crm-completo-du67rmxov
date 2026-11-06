@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react'
 import { useAuth } from '@/hooks/use-auth'
 import { companyService } from '@/services/company'
-import type { CompanySettings, User } from '@/types/crm'
+import { whatsappTemplatesService } from '@/services/whatsappTemplates'
+import type { CompanySettings, User, WhatsAppTemplateKey } from '@/types/crm'
 import {
   Building2,
   Users,
@@ -12,8 +13,8 @@ import {
   Phone,
   Save,
   Trash2,
-  AlertCircle,
-  CheckCircle2,
+  MessageSquareText,
+  Bot,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -21,6 +22,7 @@ import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Textarea } from '@/components/ui/textarea'
 import {
   Dialog,
   DialogContent,
@@ -31,9 +33,155 @@ import {
 } from '@/components/ui/dialog'
 import { toast } from '@/hooks/use-toast'
 
+const templateMeta: Record<WhatsAppTemplateKey, { title: string; hint: string }> = {
+  greeting: {
+    title: 'Mensagem de saudação',
+    hint: 'Enviada automaticamente sempre que o cliente manda uma mensagem. A mensagem de menu é enviada logo em seguida.',
+  },
+  menu: {
+    title: 'Mensagem de menu',
+    hint: 'Lista de opções iniciais mostrada ao cliente logo após a saudação. Use quebras de linha para separar as opções.',
+  },
+}
+
+const templateVariables: { key: string; description: string }[] = [
+  { key: '{{nome}}', description: 'Primeiro nome do cliente (ex: ", João")' },
+  { key: '{{nome_completo}}', description: 'Nome completo do cliente cadastrado' },
+  { key: '{{saudacao}}', description: 'Bom dia / Boa tarde / Boa noite, conforme o horário' },
+  { key: '{{telefone}}', description: 'Telefone do cliente formatado' },
+]
+
+function AutomaticMessagesTab() {
+  const [templates, setTemplates] = useState<Record<WhatsAppTemplateKey, string>>({
+    greeting: '',
+    menu: '',
+  })
+  const [loading, setLoading] = useState(true)
+  const [savingKey, setSavingKey] = useState<WhatsAppTemplateKey | null>(null)
+
+  useEffect(() => {
+    loadTemplates()
+  }, [])
+
+  const loadTemplates = async () => {
+    setLoading(true)
+    try {
+      const list = await whatsappTemplatesService.getAll()
+      const next = { greeting: '', menu: '' }
+      for (const tpl of list) {
+        if (tpl.key === 'greeting' || tpl.key === 'menu') next[tpl.key] = tpl.body || ''
+      }
+      setTemplates(next)
+    } catch (err) {
+      console.error(err)
+      toast({
+        title: 'Erro',
+        description: 'Falha ao carregar as mensagens automáticas.',
+        variant: 'destructive',
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleSave = async (key: WhatsAppTemplateKey) => {
+    if (!templates[key].trim()) {
+      toast({
+        title: 'Atenção',
+        description: 'A mensagem não pode ficar vazia.',
+        variant: 'destructive',
+      })
+      return
+    }
+    setSavingKey(key)
+    try {
+      await whatsappTemplatesService.save(key, templates[key])
+      toast({
+        title: 'Mensagem salva!',
+        description: 'As próximas respostas automáticas já usam este texto.',
+      })
+    } catch (err: any) {
+      toast({
+        title: 'Erro ao salvar',
+        description: err.message || 'Verifique as permissões de acesso.',
+        variant: 'destructive',
+      })
+    } finally {
+      setSavingKey(null)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs flex items-start gap-3">
+        <Bot className="h-5 w-5 text-blue-600 mt-0.5 shrink-0" />
+        <div>
+          <h3 className="font-bold text-slate-800 text-base">Mensagens automáticas do WhatsApp</h3>
+          <p className="text-xs text-slate-500">
+            Edite a qualquer momento os textos enviados automaticamente no atendimento. Use as
+            variáveis abaixo para personalizar cada mensagem com os dados do cliente.
+          </p>
+          <div className="flex flex-wrap gap-2 mt-3">
+            {templateVariables.map((v) => (
+              <Badge
+                key={v.key}
+                variant="outline"
+                className="bg-blue-50 text-blue-700 border-blue-200 font-mono text-[11px]"
+                title={v.description}
+              >
+                {v.key} — {v.description}
+              </Badge>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="p-10 text-center text-slate-500 bg-white rounded-xl border border-slate-200">
+          <div className="inline-block h-6 w-6 animate-spin rounded-full border-2 border-blue-600 border-t-transparent mb-2"></div>
+          <p className="text-sm">Carregando mensagens...</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {(Object.keys(templateMeta) as WhatsAppTemplateKey[]).map((key) => (
+            <Card key={key} className="border-slate-200 shadow-xs">
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <MessageSquareText className="h-4 w-4 text-blue-600" />
+                  {templateMeta[key].title}
+                </CardTitle>
+                <CardDescription>{templateMeta[key].hint}</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <Textarea
+                  value={templates[key]}
+                  onChange={(e) => setTemplates((prev) => ({ ...prev, [key]: e.target.value }))}
+                  rows={key === 'menu' ? 8 : 4}
+                  placeholder="Digite o texto da mensagem..."
+                  className="font-mono text-xs"
+                />
+                <div className="flex justify-end">
+                  <Button
+                    className="bg-blue-600 hover:bg-blue-700"
+                    onClick={() => handleSave(key)}
+                    disabled={savingKey === key}
+                  >
+                    <Save className="h-4 w-4 mr-1.5" />
+                    {savingKey === key ? 'Salvando...' : 'Salvar mensagem'}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function SettingsPage() {
   const { user } = useAuth()
-  const [activeTab, setActiveTab] = useState<'company' | 'team'>('company')
+  const [activeTab, setActiveTab] = useState<'company' | 'team' | 'auto-messages'>('company')
 
   // Empresa
   const [settings, setSettings] = useState<CompanySettings | null>(null)
@@ -241,12 +389,15 @@ export default function SettingsPage() {
       </div>
 
       <Tabs value={activeTab} onValueChange={(val: any) => setActiveTab(val)}>
-        <TabsList className="grid w-full sm:w-96 grid-cols-2">
+        <TabsList className="grid w-full lg:w-fit grid-cols-2 lg:grid-cols-3 gap-1">
           <TabsTrigger value="company" className="flex items-center gap-2">
             <Building2 className="h-4 w-4" /> Dados da Empresa
           </TabsTrigger>
           <TabsTrigger value="team" className="flex items-center gap-2">
             <Users className="h-4 w-4" /> Gestão da Equipe ({team.length})
+          </TabsTrigger>
+          <TabsTrigger value="auto-messages" className="flex items-center gap-2">
+            <MessageSquareText className="h-4 w-4" /> Mensagens Automáticas
           </TabsTrigger>
         </TabsList>
 
@@ -455,6 +606,11 @@ export default function SettingsPage() {
               </div>
             )}
           </div>
+        </TabsContent>
+
+        {/* ABA: MENSAGENS AUTOMÁTICAS */}
+        <TabsContent value="auto-messages" className="pt-4">
+          <AutomaticMessagesTab />
         </TabsContent>
       </Tabs>
 

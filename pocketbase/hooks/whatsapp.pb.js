@@ -206,18 +206,46 @@ routerAdd(
     app.save(conversation)
 
     // --- Resposta automática como atendente humano ----------------------------
+    // Os textos vêm da coleção whatsapp_templates (editáveis em Configurações).
+    // Placeholders: {{nome}}, {{nome_completo}}, {{saudacao}}, {{telefone}}
     const hour = new Date().getHours()
-    let greeting = 'Boa noite'
-    if (hour >= 5 && hour < 12) greeting = 'Bom dia'
-    else if (hour >= 12 && hour < 18) greeting = 'Boa tarde'
-    const firstName = String(clientRecord.get('name') || contactName || '')
-      .trim()
-      .split(' ')[0]
-    const clientPart = firstName ? ', ' + firstName : ''
-    const reply =
-      greeting +
-      clientPart +
-      '! Aqui é da equipe de atendimento. Recebemos sua mensagem e já estamos te respondendo. Em que podemos ajudar?'
+    let greetingWord = 'Boa noite'
+    if (hour >= 5 && hour < 12) greetingWord = 'Bom dia'
+    else if (hour >= 12 && hour < 18) greetingWord = 'Boa tarde'
+
+    let templateBody = ''
+    try {
+      const tpl = app.findRecordsByFilter('whatsapp_templates', "key = 'greeting'", '', 1, 0)
+      if (tpl.length > 0) templateBody = String(tpl[0].get('body') || '')
+    } catch (_) {}
+    if (!templateBody) {
+      templateBody =
+        '{{saudacao}}{{nome}}! Aqui é da equipe de atendimento. Recebemos sua mensagem e já estamos te respondendo. Em que podemos ajudar?'
+    }
+
+    let menuBody = ''
+    try {
+      const tpl = app.findRecordsByFilter('whatsapp_templates', "key = 'menu'", '', 1, 0)
+      if (tpl.length > 0) menuBody = String(tpl[0].get('body') || '')
+    } catch (_) {}
+
+    const clientName = String(clientRecord.get('name') || contactName || '').trim()
+    const firstName = clientName.split(' ')[0] || ''
+    const digits = normalizePhone(rawPhone)
+    const prettyPhone =
+      digits.length >= 10
+        ? '(' + digits.slice(0, 2) + ') ' + digits.slice(2, -4) + '-' + digits.slice(-4)
+        : rawPhone
+
+    const applyPlaceholders = (raw) => {
+      return String(raw || '')
+        .replace(/\{\{\s*saudacao\s*\}\}/g, greetingWord)
+        .replace(/\{\{\s*nome_completo\s*\}\}/g, clientName || 'cliente')
+        .replace(/\{\{\s*nome\s*\}\}/g, firstName ? ', ' + firstName : '')
+        .replace(/\{\{\s*telefone\s*\}\}/g, prettyPhone)
+    }
+
+    const reply = applyPlaceholders(templateBody)
 
     try {
       const result = $connectors.executeAsOwner('whatsapp', 'send_message', {
@@ -238,6 +266,23 @@ routerAdd(
       conversation.set('last_message', reply)
       conversation.set('last_message_at', new Date().toISOString())
       app.save(conversation)
+
+      // Menu de opções logo após a saudação (se estiver configurado)
+      if (menuBody) {
+        const menuText = applyPlaceholders(menuBody)
+        const menuResult = $connectors.executeAsOwner('whatsapp', 'send_message', {
+          to: rawPhone,
+          body: menuText,
+        })
+        if (menuResult && !menuResult.error) {
+          const menuRecord = new Record(messagesCollection)
+          menuRecord.set('conversation_id', conversation.id)
+          menuRecord.set('direction', 'outbound')
+          menuRecord.set('origin', 'auto')
+          menuRecord.set('body', menuText)
+          app.save(menuRecord)
+        }
+      }
     } catch (err) {
       console.log('[whatsapp] falha ao enviar resposta automática:', err)
     }
