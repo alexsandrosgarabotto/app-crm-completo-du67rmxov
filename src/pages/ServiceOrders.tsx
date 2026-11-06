@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '@/hooks/use-auth'
 import { clientsService } from '@/services/clients'
 import { stockService } from '@/services/stock'
@@ -125,6 +126,24 @@ export default function ServiceOrdersPage() {
   const [finalizeTarget, setFinalizeTarget] = useState<ServiceOrder | null>(null)
   const [cancelTarget, setCancelTarget] = useState<ServiceOrder | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  // Abre automaticamente a OS indicada na URL (ex.: vinda do atendimento WhatsApp)
+  useEffect(() => {
+    const targetId = searchParams.get('os')
+    if (!targetId) return
+    setFormOpen(false)
+    serviceOrdersService
+      .getById(targetId)
+      .then((order) => {
+        if (order) {
+          openEdit(order)
+          setSearchParams({}, { replace: true })
+        }
+      })
+      .catch((err) => console.error('Erro ao abrir a OS da URL:', err))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams])
 
   useEffect(() => {
     loadAll()
@@ -263,8 +282,8 @@ export default function ServiceOrdersPage() {
         product_id: product.id,
         service_id: undefined,
         name_snapshot: product.name,
-        unit_price: product.price || 0,
-        total_price: (form.items[index].quantity || 0) * (product.price || 0),
+        unit_price: product.sale_price || 0,
+        total_price: (form.items[index].quantity || 0) * (product.sale_price || 0),
       })
     } else {
       const service = services.find((s) => s.id === catalogId)
@@ -773,7 +792,7 @@ export default function ServiceOrdersPage() {
                         ? products.map((p) => (
                             <option key={p.id} value={p.id}>
                               {p.name} —{' '}
-                              {(p.price || 0).toLocaleString('pt-BR', {
+                              {(p.sale_price || 0).toLocaleString('pt-BR', {
                                 style: 'currency',
                                 currency: 'BRL',
                               })}

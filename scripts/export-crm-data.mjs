@@ -49,6 +49,10 @@ const COLLECTIONS = [
   'stock_movements',
   'cash_movements',
   'fiscal_documents',
+  'whatsapp_conversations',
+  'whatsapp_messages',
+  'whatsapp_templates',
+  'service_orders',
 ]
 
 async function run() {

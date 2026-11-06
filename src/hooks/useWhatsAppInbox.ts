@@ -3,7 +3,12 @@ import { useAuth } from '@/hooks/use-auth'
 import useRealtime from '@/hooks/use-realtime'
 import { whatsappService } from '@/services/whatsapp'
 import type { RecordModel } from 'pocketbase'
-import type { WhatsAppConversation, WhatsAppConversationStatus, WhatsAppMessage } from '@/types/crm'
+import type {
+  Client,
+  WhatsAppConversation,
+  WhatsAppConversationStatus,
+  WhatsAppMessage,
+} from '@/types/crm'
 
 type ConversationRecord = WhatsAppConversation & RecordModel
 type MessageRecord = WhatsAppMessage & RecordModel
@@ -166,6 +171,13 @@ export function useWhatsAppConversation(conversationId: string | null) {
     [conversationId],
   )
 
+  /** Atualiza localmente o cliente expandido da conversa (após edição inline da ficha). */
+  const setConversationClient = useCallback((client: Client) => {
+    setConversation((prev) =>
+      prev ? { ...prev, expand: { ...prev.expand, client_id: client } } : prev,
+    )
+  }, [])
+
   const sendMessage = useCallback(
     async (text: string) => {
       if (!conversationId || !text.trim()) return
@@ -187,6 +199,7 @@ export function useWhatsAppConversation(conversationId: string | null) {
     sending,
     bottomRef,
     changeStatus,
+    setConversationClient,
     sendMessage,
     reload: loadMessages,
   }

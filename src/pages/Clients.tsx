@@ -16,7 +16,9 @@ import {
   FileText,
   UserCheck,
   FileSpreadsheet,
+  ClipboardList,
 } from 'lucide-react'
+import { ClientOrdersSection as ClientOrdersList } from '@/components/whatsapp/ClientInfoPanel'
 import {
   ImportSpreadsheetModal,
   type ImportColumnDefinition,
@@ -706,6 +708,16 @@ export default function ClientsPage() {
                   <div className="rounded-lg bg-amber-50/50 p-3 text-xs text-slate-700 border border-amber-200/60 whitespace-pre-wrap leading-relaxed">
                     {selectedClient.notes}
                   </div>
+                </div>
+              )}
+
+              {/* Ordens de Serviço do cliente */}
+              {selectedClient && (
+                <div className="space-y-2">
+                  <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                    <ClipboardList className="h-3.5 w-3.5" /> Ordens de Serviço
+                  </h3>
+                  <ClientOrdersList clientId={selectedClient.id} />
                 </div>
               )}
 

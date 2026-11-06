@@ -22,7 +22,8 @@ import {
   useWhatsAppConversation,
   useWhatsAppInbox,
 } from '@/hooks/useWhatsAppInbox'
-import type { WhatsAppConversation, WhatsAppConversationStatus } from '@/types/crm'
+import { ClientInfoPanel } from '@/components/whatsapp/ClientInfoPanel'
+import type { Client, WhatsAppConversation, WhatsAppConversationStatus } from '@/types/crm'
 
 const statusStyles: Record<WhatsAppConversationStatus, string> = {
   aberto: 'bg-amber-100 text-amber-800',
@@ -146,6 +147,12 @@ export default function WhatsAppPage() {
       console.error(err)
       setActionError('Não foi possível atualizar o status do atendimento.')
     }
+  }
+
+  // Atualiza a ficha do cliente após edição inline no atendimento
+  const handleClientUpdated = (updated: Client) => {
+    conversationView.setConversationClient(updated)
+    inbox.reload()
   }
 
   return (
@@ -337,6 +344,17 @@ export default function WhatsAppPage() {
                   <span className="sr-only">Enviar mensagem</span>
                 </Button>
               </div>
+
+              {conversationView.conversation.expand?.client_id && (
+                <div className="border-t border-slate-100 p-3">
+                  <ClientInfoPanel
+                    key={conversationView.conversation.expand.client_id.id}
+                    client={conversationView.conversation.expand.client_id}
+                    conversationId={conversationView.conversation.id}
+                    onClientUpdated={handleClientUpdated}
+                  />
+                </div>
+              )}
             </>
           ) : (
             <CardContent className="flex flex-col items-center justify-center py-20 text-center text-slate-500">
