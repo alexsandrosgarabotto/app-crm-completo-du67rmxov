@@ -275,6 +275,45 @@ export interface FixedCost {
   }
 }
 
+// ================= ATENDIMENTOS WHATSAPP =================
+export type WhatsAppConversationStatus = 'aberto' | 'em_atendimento' | 'finalizado'
+export type WhatsAppMessageDirection = 'inbound' | 'outbound'
+export type WhatsAppMessageOrigin = 'auto' | 'manual'
+
+export interface WhatsAppConversation {
+  id: string
+  client_id: string
+  contact_name?: string
+  phone: string
+  status: WhatsAppConversationStatus
+  assigned_to?: string
+  last_message?: string
+  last_message_at?: string
+  last_inbound_at?: string
+  unread_count?: number
+  created: string
+  updated: string
+  expand?: {
+    client_id?: Client
+    assigned_to?: User
+  }
+}
+
+export interface WhatsAppMessage {
+  id: string
+  conversation_id: string
+  direction: WhatsAppMessageDirection
+  origin: WhatsAppMessageOrigin
+  body: string
+  external_id?: string
+  sent_by?: string
+  created: string
+  updated: string
+  expand?: {
+    sent_by?: User
+  }
+}
+
 // ================= CONTROLE DE CAIXA =================
 export type CashMovementType = 'entry' | 'exit'
 export type CashPaymentMethod =

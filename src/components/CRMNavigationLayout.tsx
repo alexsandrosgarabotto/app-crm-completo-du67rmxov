@@ -20,6 +20,7 @@ import {
   UserCheck,
   DollarSign,
   Wallet,
+  MessageCircle,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
@@ -43,6 +44,7 @@ export default function CRMNavigationLayout() {
     { title: 'Estoque', path: '/estoque', icon: Boxes },
     { title: 'Serviços', path: '/servicos', icon: Wrench },
     { title: 'Notas Fiscais', path: '/notas-fiscais', icon: Receipt },
+    { title: 'Atendimentos', path: '/atendimentos', icon: MessageCircle },
     { title: 'Agenda & Tarefas', path: '/agenda', icon: CalendarCheck },
     { title: 'Financeiro', path: '/financeiro', icon: ReceiptText },
     { title: 'Caixa', path: '/financeiro?aba=caixa', icon: Wallet },

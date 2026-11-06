@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-30T15:41:22.732Z",
+  "generatedAt": "2026-11-06T21:53:24.483Z",
   "collections": [
     {
       "name": "users",
@@ -1250,6 +1250,166 @@
         "CREATE INDEX idx_cash_movements_date ON cash_movements (date)",
         "CREATE INDEX idx_cash_movements_type ON cash_movements (type)",
         "CREATE INDEX idx_cash_movements_invoice ON cash_movements (invoice_id)"
+      ]
+    },
+    {
+      "name": "whatsapp_conversations",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != ''",
+        "view": "@request.auth.id != ''",
+        "create": "@request.auth.id != ''",
+        "update": "@request.auth.id != ''",
+        "delete": "@request.auth.id != '' && @request.auth.role = 'owner'"
+      },
+      "fields": [
+        {
+          "name": "client_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "clients"
+        },
+        {
+          "name": "contact_name",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "phone",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "status",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": ["aberto", "em_atendimento", "finalizado"]
+        },
+        {
+          "name": "assigned_to",
+          "type": "relation",
+          "required": false,
+          "system": false,
+          "collectionRef": "users"
+        },
+        {
+          "name": "last_message",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "last_message_at",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "last_inbound_at",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "unread_count",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_wa_conv_phone ON whatsapp_conversations (phone)",
+        "CREATE INDEX idx_wa_conv_client ON whatsapp_conversations (client_id)",
+        "CREATE INDEX idx_wa_conv_status ON whatsapp_conversations (status)"
+      ]
+    },
+    {
+      "name": "whatsapp_messages",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != ''",
+        "view": "@request.auth.id != ''",
+        "create": "@request.auth.id != ''",
+        "update": "@request.auth.id != ''",
+        "delete": "@request.auth.id != '' && @request.auth.role = 'owner'"
+      },
+      "fields": [
+        {
+          "name": "conversation_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "whatsapp_conversations"
+        },
+        {
+          "name": "direction",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": ["inbound", "outbound"]
+        },
+        {
+          "name": "origin",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": ["auto", "manual"]
+        },
+        {
+          "name": "body",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "external_id",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "sent_by",
+          "type": "relation",
+          "required": false,
+          "system": false,
+          "collectionRef": "users"
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_wa_msg_conversation ON whatsapp_messages (conversation_id)",
+        "CREATE INDEX idx_wa_msg_external ON whatsapp_messages (external_id)"
       ]
     }
   ]

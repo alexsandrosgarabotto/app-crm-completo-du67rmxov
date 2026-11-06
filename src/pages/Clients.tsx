@@ -78,6 +78,27 @@ export default function ClientsPage() {
   const [formAssignedTo, setFormAssignedTo] = useState('')
   const [formNotes, setFormNotes] = useState('')
 
+  // Abre a ficha do cliente direto pelo link ?cliente=<id> (usado pela aba Atendimentos)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const clientIdFromUrl = params.get('cliente')
+    if (!clientIdFromUrl) return
+
+    const openClientFromUrl = async () => {
+      try {
+        const client = await clientsService.getById(clientIdFromUrl)
+        if (client) {
+          setSelectedClient(client)
+          setIsDetailsOpen(true)
+        }
+      } catch (err) {
+        console.error('Erro ao abrir cliente via link:', err)
+      }
+    }
+    openClientFromUrl()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   useEffect(() => {
     loadData()
   }, [])
