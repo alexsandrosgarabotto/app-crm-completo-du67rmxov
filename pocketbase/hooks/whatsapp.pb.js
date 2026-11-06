@@ -7,7 +7,10 @@
  * 2. Quando chega uma mensagem de cliente, gravamos o atendimento
  *    (whatsapp_conversations / whatsapp_messages) vinculado ao cliente do CRM
  *    pelo telefone e respondemos automaticamente como atendente humano.
- * 3. O atendente também pode responder manualmente pelo mesmo canal.
+ * 3. Números ainda não cadastrados no CRM geram um cliente automático
+ *    (status padrão igual ao dos clientes criados via UI) antes de seguir
+ *    o fluxo normal.
+ * 4. O atendente também pode responder manualmente pelo mesmo canal.
  *
  * Não usamos OAuth manual nem chaves de API: todo envio vai via
  * $connectors.executeAsOwner com o toolkit "whatsapp".
@@ -74,8 +77,50 @@ routerAdd(
       } catch (_) {}
     }
 
+    if (!clientRecord && target) {
+      // Cliente desconhecido: criamos o cliente automaticamente (status padrão
+      // igual ao dos clientes criados via UI) e seguimos o fluxo normal.
+      const digitsOnly = target
+      const lastDigits = digitsOnly.slice(-4)
+      let autoName = String(contactName || '').trim()
+      if (!autoName) {
+        autoName = 'Contato WhatsApp ' + lastDigits
+      }
+
+      // Dupla checagem de duplicidade (mesma normalização da busca acima).
+      let duplicate = null
+      try {
+        const all = app.findRecordsByFilter('clients', "phone != ''", '-created', 500, 0)
+        for (const record of all) {
+          if (normalizePhone(record.get('phone')) === digitsOnly) {
+            duplicate = record
+            break
+          }
+        }
+      } catch (_) {}
+
+      if (duplicate) {
+        clientRecord = duplicate
+        console.log(
+          '[whatsapp] cliente com telefone equivalente já existe, reutilizando:',
+          duplicate.id,
+        )
+      } else {
+        try {
+          const clientsCollection = app.findCollectionByNameOrId('clients')
+          clientRecord = new Record(clientsCollection)
+          clientRecord.set('name', autoName)
+          clientRecord.set('phone', rawPhone)
+          clientRecord.set('status', 'active')
+          app.save(clientRecord)
+          console.log('[whatsapp] cliente criado automaticamente:', clientRecord.id, rawPhone)
+        } catch (err) {
+          console.log('[whatsapp] falha ao criar cliente automático:', err)
+        }
+      }
+    }
+
     if (!clientRecord) {
-      // Cliente desconhecido: não criamos atendimento, apenas registramos no log.
       console.log('[whatsapp] mensagem de número não vinculado a nenhum cliente:', rawPhone)
       return e.json(200, { ok: true, ignored: 'cliente não encontrado para o telefone informado' })
     }
