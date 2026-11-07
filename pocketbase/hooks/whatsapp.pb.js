@@ -285,6 +285,9 @@ routerAdd(
           conversation.set('contact_name', contactName || clientRecord.get('name') || '')
           conversation.set('status', 'aberto')
           conversation.set('unread_count', 0)
+          // Persiste a conversa ANTES da mensagem: a mensagem precisa do id
+          // real da conversa em conversation_id (senão fica "cannot be blank").
+          app.save(conversation)
         }
 
         // Evita processar a mesma mensagem duas vezes.
