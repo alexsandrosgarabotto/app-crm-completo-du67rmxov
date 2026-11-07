@@ -108,6 +108,7 @@ export function useWhatsAppConversation(conversationId: string | null) {
   const [messages, setMessages] = useState<WhatsAppMessage[]>([])
   const [loading, setLoading] = useState(false)
   const [sending, setSending] = useState(false)
+  const [failedIds, setFailedIds] = useState<Set<string>>(new Set())
   const bottomRef = useRef<HTMLDivElement | null>(null)
 
   const loadMessages = useCallback(async () => {
@@ -182,9 +183,35 @@ export function useWhatsAppConversation(conversationId: string | null) {
     async (text: string) => {
       if (!conversationId || !text.trim()) return
       setSending(true)
+      // Mensagem otimista: entra na conversa na hora e, se o envio real
+      // falhar, é marcada como falha em vez de desaparecer.
+      const optimisticId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: optimisticId,
+          conversation_id: conversationId,
+          direction: 'outbound',
+          origin: 'manual',
+          body: text.trim(),
+          created: new Date().toISOString(),
+          updated: new Date().toISOString(),
+          failed: true,
+        } as WhatsAppMessage,
+      ])
+      setFailedIds((prev) => new Set(prev).add(optimisticId))
+
       try {
         await whatsappService.sendMessage(conversationId, text.trim())
+        setFailedIds((prev) => {
+          const next = new Set(prev)
+          next.delete(optimisticId)
+          return next
+        })
         await loadMessages()
+      } catch (err) {
+        console.error('Falha ao enviar mensagem pelo WhatsApp:', err)
+        throw err
       } finally {
         setSending(false)
       }
@@ -197,6 +224,7 @@ export function useWhatsAppConversation(conversationId: string | null) {
     messages,
     loading,
     sending,
+    failedIds,
     bottomRef,
     changeStatus,
     setConversationClient,

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
+  AlertCircle,
   ArrowLeft,
   CheckCircle2,
   ExternalLink,
@@ -87,8 +88,10 @@ function ConversationListItem({
 
 function MessageBubble({
   message,
+  failed,
 }: {
   message: { direction: string; origin: string; body: string; created: string }
+  failed?: boolean
 }) {
   const isOutbound = message.direction === 'outbound'
   return (
@@ -96,15 +99,31 @@ function MessageBubble({
       <div
         className={cn(
           'max-w-[80%] rounded-2xl px-3 py-2 text-sm shadow-sm',
-          isOutbound
-            ? 'bg-emerald-600 text-white'
-            : 'bg-white border border-slate-200 text-slate-800',
+          failed
+            ? 'bg-red-50 border border-red-300 text-red-700'
+            : isOutbound
+              ? 'bg-emerald-600 text-white'
+              : 'bg-white border border-slate-200 text-slate-800',
         )}
       >
         <p className="whitespace-pre-wrap break-words">{message.body}</p>
         {isOutbound && (
-          <p className={cn('text-[10px] mt-1', isOutbound ? 'text-emerald-100' : 'text-slate-400')}>
-            {message.origin === 'auto' ? 'Resposta automática' : 'Atendente'}
+          <p
+            className={cn(
+              'text-[10px] mt-1 flex items-center gap-1',
+              failed
+                ? 'text-red-600 font-medium'
+                : isOutbound
+                  ? 'text-emerald-100'
+                  : 'text-slate-400',
+            )}
+          >
+            {failed && <AlertCircle className="h-3 w-3" />}
+            {failed
+              ? 'Falha no envio pelo WhatsApp'
+              : message.origin === 'auto'
+                ? 'Resposta automática'
+                : 'Atendente'}
           </p>
         )}
       </div>
@@ -317,7 +336,13 @@ export default function WhatsAppPage() {
                     Nenhuma mensagem nesta conversa.
                   </p>
                 ) : (
-                  conversationView.messages.map((m) => <MessageBubble key={m.id} message={m} />)
+                  conversationView.messages.map((m) => (
+                    <MessageBubble
+                      key={m.id}
+                      message={m}
+                      failed={conversationView.failedIds.has(m.id)}
+                    />
+                  ))
                 )}
                 <div ref={conversationView.bottomRef} />
               </CardContent>
