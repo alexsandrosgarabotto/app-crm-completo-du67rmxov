@@ -20,8 +20,8 @@
  * Configuração necessária (variáveis de ambiente do projeto, via set_env):
  * - WHATSAPP_PHONE_NUMBER_ID: id do número no Meta (Cloud API).
  *   Descubra o valor com a ação WHATSAPP_GET_PHONE_NUMBERS do conector.
- *   Já configurado no projeto: 1433277493204874 (número da empresa no
- *   painel da Meta Cloud API).
+ *   Reconfigurado no projeto em 07/11/2026: 1433277493204874 (número da
+ *   empresa no painel da Meta Cloud API).
  * - WHATSAPP_WEBHOOK_VERIFY_TOKEN: token de verificação do webhook
  *   (opcional; padrão "skip-crm" — precisa ser o mesmo cadastrado no Meta).
  *
