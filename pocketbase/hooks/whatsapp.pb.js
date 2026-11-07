@@ -17,11 +17,10 @@
  *    seguir o fluxo normal.
  * 4. O atendente também responde manualmente pela tela de Atendimentos.
  *
- * Configuração necessária (variáveis de ambiente do projeto, via set_env):
- * - WHATSAPP_PHONE_NUMBER_ID: id do número no Meta (Cloud API).
- *   Descubra o valor com a ação WHATSAPP_GET_PHONE_NUMBERS do conector.
- *   Reconfigurado no projeto em 07/11/2026: 1433277493204874 (número da
- *   empresa no painel da Meta Cloud API).
+ * Configuração necessária:
+ * - Phone Number ID do número no Meta (Cloud API): salvo no banco, na
+ *   coleção whatsapp_templates com key = 'phone_number_id', editável em
+ *   Configurações > Mensagens Automáticas. Não usa variável de ambiente.
  * - WHATSAPP_WEBHOOK_VERIFY_TOKEN: token de verificação do webhook
  *   (opcional; padrão "skip-crm" — precisa ser o mesmo cadastrado no Meta).
  *
@@ -79,10 +78,24 @@ routerAdd(
       return digits
     }
 
-    const phoneNumberId = String($os.getenv('WHATSAPP_PHONE_NUMBER_ID') || '')
+    // Phone Number ID salvo nas Configurações do CRM (coleção whatsapp_templates).
+    const readPhoneNumberId = () => {
+      try {
+        const cfg = app.findRecordsByFilter(
+          'whatsapp_templates',
+          "key = 'phone_number_id'",
+          '',
+          1,
+          0,
+        )
+        if (cfg.length > 0) return String(cfg[0].get('body') || '').trim()
+      } catch (_) {}
+      return ''
+    }
     const sendWhatsApp = (to, text) => {
+      const phoneNumberId = readPhoneNumberId()
       if (!phoneNumberId) {
-        throw new Error('WHATSAPP_PHONE_NUMBER_ID não configurado (env do projeto)')
+        throw new Error('Phone Number ID não configurado nas Configurações do CRM')
       }
       const result = $connectors.executeAsOwner('whatsapp', 'WHATSAPP_SEND_MESSAGE', {
         text: String(text),
@@ -407,7 +420,10 @@ routerAdd(
           }
         } catch (sendErr) {
           sendError = String(sendErr)
-          console.log('[whatsapp] falha ao enviar resposta automática:', sendErr)
+          console.log(
+            '[whatsapp] aviso: resposta automática não enviada (verifique o Phone Number ID nas Configurações do CRM):',
+            sendErr,
+          )
         }
 
         results.push({
@@ -455,11 +471,13 @@ routerAdd('POST', '/backend/v1/crm/whatsapp/send', (e) => {
     throw new BadRequestError('Conversa sem telefone válido para envio')
   }
 
-  const phoneNumberId = String($os.getenv('WHATSAPP_PHONE_NUMBER_ID') || '')
+  let phoneNumberId = ''
+  try {
+    const cfg = app.findRecordsByFilter('whatsapp_templates', "key = 'phone_number_id'", '', 1, 0)
+    if (cfg.length > 0) phoneNumberId = String(cfg[0].get('body') || '').trim()
+  } catch (_) {}
   if (!phoneNumberId) {
-    throw new BadRequestError(
-      'WHATSAPP_PHONE_NUMBER_ID não configurado no backend (env do projeto)',
-    )
+    throw new BadRequestError('Phone Number ID não configurado nas Configurações do CRM')
   }
 
   let digits = String(phone).replace(/\D/g, '')

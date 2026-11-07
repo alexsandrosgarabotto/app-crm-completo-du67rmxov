@@ -358,10 +358,13 @@ export interface ServiceOrder {
 }
 
 export type WhatsAppTemplateKey = 'greeting' | 'menu'
+// Configuração do WhatsApp guardada na mesma coleção de mensagens automáticas
+export type WhatsAppSettingKey = 'phone_number_id'
+export type WhatsAppStoredKey = WhatsAppTemplateKey | WhatsAppSettingKey
 
 export interface WhatsAppTemplate {
   id: string
-  key: WhatsAppTemplateKey
+  key: WhatsAppStoredKey
   body: string
   active?: boolean
   updated_by?: string

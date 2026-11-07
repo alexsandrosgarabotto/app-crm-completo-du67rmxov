@@ -1,5 +1,5 @@
 import pb from '@/lib/pocketbase/client'
-import type { WhatsAppTemplate, WhatsAppTemplateKey } from '@/types/crm'
+import type { WhatsAppStoredKey, WhatsAppTemplate, WhatsAppTemplateKey } from '@/types/crm'
 
 export const whatsappTemplateDefaults: Record<WhatsAppTemplateKey, string> = {
   greeting:
@@ -37,7 +37,7 @@ export const whatsappTemplatesService = {
     }
   },
 
-  async save(key: WhatsAppTemplateKey, body: string, updatedBy?: string): Promise<void> {
+  async save(key: WhatsAppStoredKey, body: string, updatedBy?: string): Promise<void> {
     const existing = await pb.collection('whatsapp_templates').getFullList<WhatsAppTemplate>({
       filter: `key = "${key}"`,
     })
