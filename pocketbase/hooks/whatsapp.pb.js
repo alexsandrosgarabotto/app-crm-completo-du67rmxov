@@ -97,7 +97,9 @@ routerAdd(
       if (!phoneNumberId) {
         throw new Error('Phone Number ID não configurado nas Configurações do CRM')
       }
-      const result = $connectors.executeAsOwner('whatsapp', 'WHATSAPP_SEND_MESSAGE', {
+      // Assinatura correta: executeAsOwner(acao, args) — o toolkit é
+      // derivado da própria ação (prefixo WHATSAPP_).
+      const result = $connectors.executeAsOwner('WHATSAPP_SEND_MESSAGE', {
         text: String(text),
         to_number: toNumber(to),
         phone_number_id: phoneNumberId,
@@ -487,7 +489,7 @@ routerAdd('POST', '/backend/v1/crm/whatsapp/send', (e) => {
 
   let result = null
   try {
-    result = $connectors.executeAsOwner('whatsapp', 'WHATSAPP_SEND_MESSAGE', {
+    result = $connectors.executeAsOwner('WHATSAPP_SEND_MESSAGE', {
       text: String(text),
       to_number: digits,
       phone_number_id: phoneNumberId,
