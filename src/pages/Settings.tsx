@@ -33,6 +33,7 @@ import {
 } from '@/components/ui/dialog'
 import { toast } from '@/hooks/use-toast'
 import { PhoneNumberIdCard } from '@/components/whatsapp/PhoneNumberIdCard'
+import { ZenviaIntegrationCard } from '@/components/whatsapp/ZenviaIntegrationCard'
 
 const templateMeta: Record<WhatsAppTemplateKey, { title: string; hint: string }> = {
   greeting: {
@@ -138,6 +139,8 @@ function AutomaticMessagesTab() {
       </div>
 
       <PhoneNumberIdCard />
+
+      <ZenviaIntegrationCard />
 
       {loading ? (
         <div className="p-10 text-center text-slate-500 bg-white rounded-xl border border-slate-200">
