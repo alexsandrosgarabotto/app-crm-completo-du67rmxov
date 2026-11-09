@@ -10,6 +10,7 @@ import CRMNavigationLayout from '@/components/CRMNavigationLayout'
 import Index from './pages/Index'
 import LoginPage from './pages/Login'
 import ResetPasswordPage from './pages/ResetPassword'
+import PrivacyPolicyPage from './pages/PrivacyPolicy'
 import DashboardPage from './pages/Dashboard'
 import ClientsPage from './pages/Clients'
 import PipelineDealsPage from './pages/Deals'
@@ -37,6 +38,7 @@ const App = () => (
           {/* Autenticação pública */}
           <Route path="/login" element={<LoginPage />} />
           <Route path="/reset-password" element={<ResetPasswordPage />} />
+          <Route path="/privacidade" element={<PrivacyPolicyPage />} />
 
           {/* Áreas protegidas do CRM dentro do Navigation Layout */}
           <Route
