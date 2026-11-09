@@ -560,6 +560,8 @@ routerAdd('POST', '/backend/v1/crm/whatsapp/send', (e) => {
   }
 
   // META PRIMÁRIO, ZENVIA FALLBACK.
+  // Phone Number ID oficial: lido das Configurações do CRM (whatsapp_templates).
+  const phoneNumberId = readConfig('phone_number_id')
   let usedChannel = 'meta'
   let result = null
   try {
