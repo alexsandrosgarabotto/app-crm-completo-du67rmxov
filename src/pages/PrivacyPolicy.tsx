@@ -1,6 +1,6 @@
 // Nome do responsável/empresa exibido na política de privacidade.
 // Edite esta constante (e a de contato, se necessário) para atualizar a página.
-const EMPRESA_NOME = 'Alex'
+const EMPRESA_NOME = 'A.Sgarabotto'
 const WHATSAPP_CONTATO = '+55 66 9973-3422'
 const WHATSAPP_LINK = 'https://wa.me/556699733422'
 const ULTIMA_ATUALIZACAO = '9 de novembro de 2026'
