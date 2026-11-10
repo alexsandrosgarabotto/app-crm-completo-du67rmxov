@@ -3,10 +3,17 @@
 /**
  * Automação de WhatsApp Business (inbound via Meta + envio via Meta)
  * ------------------------------------------------------------------
- * 1. ENVIO (outbound): ÚNICO CANAL = META, via conector Skip
- *    WhatsApp (toolkit "whatsapp", $connectors.executeAsOwner
- *    'WHATSAPP_SEND_MESSAGE'). Se o envio falhar, o erro é apenas
- *    registrado nos logs. Não há outro canal de envio.
+ * 1. ENVIO (outbound): ÚNICO CANAL = META.
+ *    - Caminho primário: Graph API da Meta diretamente ($http.send,
+ *      POST https://graph.facebook.com/v25.0/{phoneNumberId}/messages),
+ *      usado quando existe um token próprio configurado (key
+ *      'meta_access_token' em whatsapp_templates — gerado em
+ *      developers.facebook.com > WhatsApp > API Setup).
+ *    - Fallback (sem token configurado): conector Skip WhatsApp
+ *      (toolkit "whatsapp", $connectors.executeAsOwner
+ *      'WHATSAPP_SEND_MESSAGE').
+ *    Se o envio falhar, o erro é apenas registrado nos logs (rota de
+ *    resposta automática) ou devolvido ao atendente (rota /send).
  * 2. Inbound: o webhook da Meta WhatsApp Cloud API entrega as mensagens
  *    nesta rota. O GET faz o handshake de verificação do webhook
  *    (hub.challenge) e o POST aceita tanto o payload do Cloud API
@@ -89,8 +96,16 @@ routerAdd(
       return ''
     }
     const readPhoneNumberId = () => readConfig('phone_number_id')
+    const readMetaAccessToken = () => readConfig('meta_access_token')
 
-    // Envio via conector Skip WhatsApp (canal único — Meta Cloud API).
+    // Token identificado nos logs só pelos 4 últimos caracteres (nunca o valor
+    // completo, que dá acesso à conta de WhatsApp Business da empresa).
+    const maskToken = (token) => {
+      const t = String(token || '')
+      return t.length > 4 ? '...' + t.slice(-4) : '***'
+    }
+
+    // Envio via conector Skip WhatsApp (fallback, sem token próprio).
     // Assinatura correta: executeAsOwner(acao, args) — o
     // toolkit é derivado da própria ação (prefixo WHATSAPP_).
     const sendViaConnector = (to, text) => {
@@ -111,15 +126,58 @@ routerAdd(
       return result
     }
 
-    // Envio pelo canal único: conector Skip WhatsApp (Meta). Falhas são
-    // apenas registradas nos logs.
+    // Envio direto pela Graph API da Meta usando o token próprio da empresa
+    // (key 'meta_access_token' em whatsapp_templates). Mesmo payload de texto
+    // do conector: messaging_product "whatsapp", to, type "text", text.body.
+    const sendViaMetaGraphApi = (to, text) => {
+      const phoneNumberId = readPhoneNumberId()
+      const accessToken = readMetaAccessToken()
+      if (!phoneNumberId) {
+        throw new Error('Phone Number ID não configurado nas Configurações do CRM')
+      }
+      if (!accessToken) {
+        throw new Error('Token de acesso Meta não configurado nas Configurações do CRM')
+      }
+      const url = 'https://graph.facebook.com/v25.0/' + phoneNumberId + '/messages'
+      const payload = {
+        messaging_product: 'whatsapp',
+        to: toNumber(to),
+        type: 'text',
+        text: { body: String(text) },
+      }
+      const res = $http.send({
+        url: url,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer ' + accessToken,
+        },
+        body: JSON.stringify(payload),
+      })
+      // $http.send lança erro em status >= 400 e devolve { status_code, headers, body }.
+      const status = res.status_code || 0
+      if (status < 200 || status >= 300) {
+        throw new Error('Graph API respondeu status ' + status + ': ' + (res.body || 'sem corpo'))
+      }
+      return res
+    }
+
+    // Envio pelo canal Meta: token próprio (Graph API direta) quando
+    // configurado; sem token, mantém o conector Skip. Falhas são apenas
+    // registradas nos logs.
     const sendWhatsApp = (to, text) => {
+      const accessToken = readMetaAccessToken()
+      const via = accessToken
+        ? 'token próprio (' + maskToken(accessToken) + ')'
+        : 'conector Skip (fallback, sem token configurado)'
       try {
-        const result = sendViaConnector(to, text)
-        console.log('[whatsapp] Meta: envio OK (destinatário ' + toNumber(to) + ')')
+        const result = accessToken ? sendViaMetaGraphApi(to, text) : sendViaConnector(to, text)
+        console.log(
+          '[whatsapp] Meta: envio OK (destinatário ' + toNumber(to) + ', via ' + via + ')',
+        )
         return result
       } catch (metaErr) {
-        console.log('[whatsapp] Meta falhou (' + metaErr + ')')
+        console.log('[whatsapp] Meta falhou (' + metaErr + ', via ' + via + ')')
         throw metaErr
       }
     }
@@ -501,24 +559,54 @@ routerAdd('POST', '/backend/v1/crm/whatsapp/send', (e) => {
     return value
   }
 
-  // Canal único: Meta (conector Skip). Phone Number ID oficial lido das
-  // Configurações do CRM (whatsapp_templates).
+  // Canal único: Meta. Token próprio (Graph API direta) quando configurado
+  // (key 'meta_access_token'); sem token, conector Skip. Phone Number ID
+  // oficial lido das Configurações do CRM (whatsapp_templates).
   const phoneNumberId = readConfig('phone_number_id')
+  const accessToken = readConfig('meta_access_token')
+  const via = accessToken
+    ? 'token próprio (...' + String(accessToken).slice(-4) + ')'
+    : 'conector Skip (fallback, sem token configurado)'
   try {
     if (!phoneNumberId) {
       throw new Error('Phone Number ID não configurado nas Configurações do CRM')
     }
-    const result = $connectors.executeAsOwner('WHATSAPP_SEND_MESSAGE', {
-      text: String(text),
-      to_number: digits,
-      phone_number_id: phoneNumberId,
-    })
-    if (!result || result.successful === false || (result.error && !result.data)) {
-      throw new Error(String((result && result.error) || 'erro desconhecido no conector WhatsApp'))
+    if (accessToken) {
+      const url = 'https://graph.facebook.com/v25.0/' + phoneNumberId + '/messages'
+      const payload = {
+        messaging_product: 'whatsapp',
+        to: digits,
+        type: 'text',
+        text: { body: String(text) },
+      }
+      const res = $http.send({
+        url: url,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer ' + accessToken,
+        },
+        body: JSON.stringify(payload),
+      })
+      const status = res.status_code || 0
+      if (status < 200 || status >= 300) {
+        throw new Error('Graph API respondeu status ' + status + ': ' + (res.body || 'sem corpo'))
+      }
+    } else {
+      const result = $connectors.executeAsOwner('WHATSAPP_SEND_MESSAGE', {
+        text: String(text),
+        to_number: digits,
+        phone_number_id: phoneNumberId,
+      })
+      if (!result || result.successful === false || (result.error && !result.data)) {
+        throw new Error(
+          String((result && result.error) || 'erro desconhecido no conector WhatsApp'),
+        )
+      }
     }
-    console.log('[whatsapp] Meta: envio OK (destinatário ' + digits + ')')
+    console.log('[whatsapp] Meta: envio OK (destinatário ' + digits + ', via ' + via + ')')
   } catch (metaErr) {
-    console.log('[whatsapp] Meta falhou (' + metaErr + ')')
+    console.log('[whatsapp] Meta falhou (' + metaErr + ', via ' + via + ')')
     throw new BadRequestError('Falha ao enviar mensagem via Meta: ' + metaErr)
   }
 

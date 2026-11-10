@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-10T00:02:15.542Z",
+  "generatedAt": "2026-11-10T01:20:15.452Z",
   "collections": [
     {
       "name": "users",
@@ -386,7 +386,7 @@
           "type": "select",
           "required": true,
           "system": false,
-          "selectValues": ["pending", "paid", "cancelled"]
+          "selectValues": ["receivable", "payable"]
         },
         {
           "name": "due_date",
@@ -1548,7 +1548,7 @@
           "type": "select",
           "required": true,
           "system": false,
-          "selectValues": ["greeting", "menu", "phone_number_id"]
+          "selectValues": ["greeting", "menu", "phone_number_id", "meta_access_token"]
         },
         {
           "name": "body",
