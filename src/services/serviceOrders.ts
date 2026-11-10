@@ -1,9 +1,23 @@
 import pb from '@/lib/pocketbase/client'
-import type { ServiceOrder, ServiceOrderStatus } from '@/types/crm'
+import type { ServiceOrder, ServiceOrderStatus, ServiceOrderStatusChange } from '@/types/crm'
 
 export interface StockIssue {
   product: string
   message: string
+}
+
+export type AvisoWhatsapp =
+  | 'enviado'
+  | 'fora_da_janela'
+  | 'modo_validacao'
+  | 'sem_telefone'
+  | 'sem_conversa'
+  | 'falhou'
+
+export interface StatusChangeResult {
+  order: ServiceOrder
+  whatsapp: AvisoWhatsapp
+  whatsappErro?: string
 }
 
 export const serviceOrderStatusLabels: Record<ServiceOrderStatus, string> = {
@@ -91,12 +105,84 @@ export const serviceOrdersService = {
   },
 
   /**
+   * Mudança de status pelo CRM: grava no histórico (quem/quando/de-para) e
+   * dispara o aviso de WhatsApp ao cliente pelo backend (canal Meta primário,
+   * respeitando o modo de validação e a janela de 24h).
+   */
+  async changeStatus(
+    order: ServiceOrder,
+    novoStatus: ServiceOrderStatus,
+    usuario?: { id?: string; name?: string },
+  ): Promise<StatusChangeResult> {
+    const statusAnterior = order.status
+    if (statusAnterior === novoStatus) {
+      return { order, whatsapp: 'enviado' }
+    }
+
+    const entrada: ServiceOrderStatusChange = {
+      de: statusAnterior,
+      para: novoStatus,
+      por: usuario?.id,
+      por_nome: usuario?.name || '',
+      quando: new Date().toISOString(),
+      aviso_whatsapp: undefined,
+    }
+
+    let aviso: AvisoWhatsapp = 'falhou'
+    let avisoErro: string | undefined
+    let historico = order.historico || []
+
+    // A gravação (status + histórico + aviso de WhatsApp) é feita pelo hook
+    // backend, que também manda a mensagem pelo canal Meta primário.
+    try {
+      const res = await pb.send(`/backend/v1/crm/service-orders/${order.id}/notice`, {
+        method: 'POST',
+        body: JSON.stringify({ status: novoStatus }),
+      })
+      const data = res as {
+        status?: string
+        historico?: ServiceOrderStatusChange[]
+        motivo?: string
+        enviado?: boolean
+      }
+      if (data.historico) historico = data.historico
+      if (data.enviado) {
+        aviso = 'enviado'
+      } else if (data.motivo === 'Modo validação') {
+        aviso = 'modo_validacao'
+        avisoErro = data.motivo
+      } else if (data.motivo === 'Fora da janela de 24h') {
+        aviso = 'fora_da_janela'
+        avisoErro = data.motivo
+      } else if (String(data.motivo || '').includes('sem conversa')) {
+        aviso = 'sem_conversa'
+        avisoErro = data.motivo
+      } else if (String(data.motivo || '').includes('sem telefone')) {
+        aviso = 'sem_telefone'
+        avisoErro = data.motivo
+      } else if (data.motivo) {
+        avisoErro = data.motivo
+      }
+    } catch (err: any) {
+      avisoErro = err?.message || 'Falha ao avisar o cliente por WhatsApp'
+    }
+
+    entrada.aviso_whatsapp = aviso
+    const updated = { ...order, status: novoStatus, historico }
+    return { order: updated, whatsapp: aviso, whatsappErro: avisoErro }
+  },
+
+  /**
    * Finaliza a OS: baixa o estoque dos produtos (uma única vez) e gera a
    * conta a receber no financeiro com o valor total (sem duplicar).
    */
   async finalize(
     order: ServiceOrder,
-    params: { userId?: string; onStockIssue?: (issue: StockIssue) => void },
+    params: {
+      userId?: string
+      userName?: string
+      onStockIssue?: (issue: StockIssue) => void
+    },
   ): Promise<ServiceOrder> {
     // 1. Baixa de estoque (apenas na primeira finalização)
     if (!order.stock_released) {
@@ -152,16 +238,28 @@ export const serviceOrdersService = {
       }
     }
 
-    return await this.update(order.id, {
+    const saved = await this.update(order.id, {
       status: 'finalizada',
       finished_at: new Date().toISOString(),
       stock_released: true,
       invoice_id: invoiceId || undefined,
     })
+
+    // Aviso ao cliente pelo WhatsApp (mesmo caminho das outras mudanças de
+    // status: canal Meta primário, modo de validação e janela de 24h).
+    const { order: avisada } = await this.changeStatus(
+      saved,
+      'finalizada',
+      params.userId ? { id: params.userId, name: params.userName } : undefined,
+    )
+    return avisada
   },
 
   /** Cancelar OS desfaz a baixa de estoque, se ela ainda estiver aplicada. */
-  async cancel(order: ServiceOrder): Promise<ServiceOrder> {
+  async cancel(
+    order: ServiceOrder,
+    params?: { userId?: string; userName?: string },
+  ): Promise<ServiceOrder> {
     if (order.stock_released) {
       for (const item of order.items || []) {
         if (item.item_type !== 'product' || !item.product_id) continue
@@ -184,6 +282,14 @@ export const serviceOrdersService = {
       }
     }
 
-    return await this.update(order.id, { status: 'cancelada', stock_released: false })
+    const canceled = await this.update(order.id, { status: 'cancelada', stock_released: false })
+
+    // Aviso ao cliente pelo WhatsApp (mesmo caminho das outras mudanças).
+    const { order: avisada } = await this.changeStatus(
+      canceled,
+      'cancelada',
+      params?.userId ? { id: params.userId, name: params.userName } : undefined,
+    )
+    return avisada
   },
 }

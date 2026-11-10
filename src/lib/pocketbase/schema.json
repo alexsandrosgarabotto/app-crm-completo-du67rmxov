@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-10T22:09:59.468Z",
+  "generatedAt": "2026-11-10T22:28:14.532Z",
   "collections": [
     {
       "name": "users",
@@ -1536,6 +1536,18 @@
           "required": false,
           "system": false,
           "autodateTriggers": ["onCreate", "onUpdate"]
+        },
+        {
+          "name": "agendamento_para",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "historico",
+          "type": "json",
+          "required": false,
+          "system": false
         }
       ],
       "indexes": [

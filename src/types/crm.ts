@@ -332,6 +332,16 @@ export interface ServiceOrderItem {
   total_price: number
 }
 
+export interface ServiceOrderStatusChange {
+  de?: string
+  para: string
+  por?: string
+  por_nome?: string
+  quando: string
+  /** 'enviado' ou o motivo pelo qual o aviso não saiu (ex.: 'não enviado', 'Modo validação'). */
+  aviso_whatsapp?: string
+}
+
 export interface ServiceOrder {
   id: string
   number: string
@@ -348,6 +358,8 @@ export interface ServiceOrder {
   invoice_id?: string
   stock_released?: boolean
   created_by?: string
+  agendamento_para?: string
+  historico?: ServiceOrderStatusChange[]
   created: string
   updated: string
   expand?: {
