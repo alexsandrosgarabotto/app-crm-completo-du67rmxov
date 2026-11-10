@@ -3,15 +3,10 @@
 /**
  * Automação de WhatsApp Business (inbound via Meta + envio via Meta)
  * ------------------------------------------------------------------
- * 1. ENVIO (outbound): META COMO CANAL PRIMÁRIO, via conector Skip
+ * 1. ENVIO (outbound): ÚNICO CANAL = META, via conector Skip
  *    WhatsApp (toolkit "whatsapp", $connectors.executeAsOwner
- *    'WHATSAPP_SEND_MESSAGE'). A API REST da Zenvia
- *    (POST https://api.zenvia.com/v2/channels/whatsapp/messages, header
- *    X-API-TOKEN) é apenas FALLBACK: só é acionada quando o envio pela
- *    Meta falha (erro do conector/HTTP). As credenciais da Zenvia ficam
- *    na coleção whatsapp_templates: key = 'zenvia_api_token' e
- *    key = 'zenvia_sender', editáveis em
- *    Configurações > Mensagens Automáticas > Integração Zenvia.
+ *    'WHATSAPP_SEND_MESSAGE'). Se o envio falhar, o erro é apenas
+ *    registrado nos logs. Não há outro canal de envio.
  * 2. Inbound: o webhook da Meta WhatsApp Cloud API entrega as mensagens
  *    nesta rota. O GET faz o handshake de verificação do webhook
  *    (hub.challenge) e o POST aceita tanto o payload do Cloud API
@@ -73,8 +68,8 @@ routerAdd(
       return digits
     }
 
-    // Número no formato com código do país, só dígitos (usado pela Zenvia
-    // e pelo conector Skip): ex. 5565999998888.
+    // Número no formato com código do país, só dígitos (usado pelo
+    // conector Skip): ex. 5565999998888.
     const toNumber = (raw) => {
       let digits = String(raw || '').replace(/\D/g, '')
       if (digits && digits.length <= 11) {
@@ -95,47 +90,7 @@ routerAdd(
     }
     const readPhoneNumberId = () => readConfig('phone_number_id')
 
-    // Envio via API REST da Zenvia (WhatsApp usa a Cloud API da Meta por baixo).
-    // Requer zenvia_api_token + zenvia_sender nas Configurações do CRM.
-    const sendViaZenvia = (to, text) => {
-      const apiToken = readConfig('zenvia_api_token')
-      const sender = readConfig('zenvia_sender')
-      if (!apiToken || !sender) {
-        throw new Error('Zenvia não configurada (token/sender ausentes)')
-      }
-
-      const payload = {
-        from: sender,
-        to: toNumber(to),
-        contents: [{ type: 'text', text: String(text) }],
-      }
-
-      const resp = $http.send({
-        url: 'https://api.zenvia.com/v2/channels/whatsapp/messages',
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-API-TOKEN': apiToken,
-        },
-        body: JSON.stringify(payload),
-      })
-
-      const status = resp.status
-      let responseText = ''
-      try {
-        responseText = String(resp.raw || resp.body || '')
-      } catch (_) {
-        responseText = ''
-      }
-      if (status < 200 || status >= 300) {
-        console.log('[whatsapp] Zenvia: falhou — HTTP ' + status + ' — resposta: ' + responseText)
-        throw new Error('Zenvia: falhou — HTTP ' + status + ' — ' + responseText)
-      }
-      console.log('[whatsapp] Zenvia: envio OK (destinatário ' + toNumber(to) + ')')
-      return { status: status, response: responseText }
-    }
-
-    // Envio via conector Skip WhatsApp (canal PRIMÁRIO — Meta Cloud API).
+    // Envio via conector Skip WhatsApp (canal único — Meta Cloud API).
     // Assinatura correta: executeAsOwner(acao, args) — o
     // toolkit é derivado da própria ação (prefixo WHATSAPP_).
     const sendViaConnector = (to, text) => {
@@ -156,29 +111,16 @@ routerAdd(
       return result
     }
 
-    // META PRIMÁRIO, ZENVIA FALLBACK: tenta sempre primeiro o conector
-    // Skip (Meta); se falhar, aciona a Zenvia somente se estiver
-    // configurada (token + sender preenchidos).
+    // Envio pelo canal único: conector Skip WhatsApp (Meta). Falhas são
+    // apenas registradas nos logs.
     const sendWhatsApp = (to, text) => {
       try {
         const result = sendViaConnector(to, text)
         console.log('[whatsapp] Meta: envio OK (destinatário ' + toNumber(to) + ')')
         return result
       } catch (metaErr) {
-        const zenviaToken = readConfig('zenvia_api_token')
-        const zenviaSender = readConfig('zenvia_sender')
-        if (!zenviaToken || !zenviaSender) {
-          console.log(
-            '[whatsapp] Meta falhou (' +
-              metaErr +
-              ') e Zenvia não configurada (zenvia_api_token/zenvia_sender) — sem canal de envio',
-          )
-          throw metaErr
-        }
-        console.log('[whatsapp] Meta falhou (' + metaErr + '), tentando Zenvia')
-        const zenviaResult = sendViaZenvia(to, text)
-        console.log('[whatsapp] Zenvia (fallback): envio OK (destinatário ' + toNumber(to) + ')')
-        return zenviaResult
+        console.log('[whatsapp] Meta falhou (' + metaErr + ')')
+        throw metaErr
       }
     }
 
@@ -493,7 +435,7 @@ routerAdd(
         } catch (sendErr) {
           sendError = String(sendErr)
           console.log(
-            '[whatsapp] aviso: resposta automática não enviada (verifique o Phone Number ID da Meta ou, como fallback, a Integração Zenvia nas Configurações do CRM):',
+            '[whatsapp] aviso: resposta automática não enviada (verifique o Phone Number ID da Meta nas Configurações do CRM):',
             sendErr,
           )
         }
@@ -559,16 +501,14 @@ routerAdd('POST', '/backend/v1/crm/whatsapp/send', (e) => {
     return value
   }
 
-  // META PRIMÁRIO, ZENVIA FALLBACK.
-  // Phone Number ID oficial: lido das Configurações do CRM (whatsapp_templates).
+  // Canal único: Meta (conector Skip). Phone Number ID oficial lido das
+  // Configurações do CRM (whatsapp_templates).
   const phoneNumberId = readConfig('phone_number_id')
-  let usedChannel = 'meta'
-  let result = null
   try {
     if (!phoneNumberId) {
       throw new Error('Phone Number ID não configurado nas Configurações do CRM')
     }
-    result = $connectors.executeAsOwner('WHATSAPP_SEND_MESSAGE', {
+    const result = $connectors.executeAsOwner('WHATSAPP_SEND_MESSAGE', {
       text: String(text),
       to_number: digits,
       phone_number_id: phoneNumberId,
@@ -578,52 +518,8 @@ routerAdd('POST', '/backend/v1/crm/whatsapp/send', (e) => {
     }
     console.log('[whatsapp] Meta: envio OK (destinatário ' + digits + ')')
   } catch (metaErr) {
-    const zenviaToken = readConfig('zenvia_api_token')
-    const zenviaSender = readConfig('zenvia_sender')
-    if (!zenviaToken || !zenviaSender) {
-      console.log(
-        '[whatsapp] Meta falhou (' +
-          metaErr +
-          ') e Zenvia não configurada (zenvia_api_token/zenvia_sender) — sem canal de envio',
-      )
-      throw new BadRequestError('Falha ao enviar mensagem via Meta: ' + metaErr)
-    }
-    console.log('[whatsapp] Meta falhou (' + metaErr + '), tentando Zenvia')
-    usedChannel = 'zenvia'
-    const payload = {
-      from: zenviaSender,
-      to: digits,
-      contents: [{ type: 'text', text: String(text) }],
-    }
-    try {
-      const resp = $http.send({
-        url: 'https://api.zenvia.com/v2/channels/whatsapp/messages',
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-API-TOKEN': zenviaToken,
-        },
-        body: JSON.stringify(payload),
-      })
-      const status = resp.status
-      let responseText = ''
-      try {
-        responseText = String(resp.raw || resp.body || '')
-      } catch (_) {
-        responseText = ''
-      }
-      if (status < 200 || status >= 300) {
-        console.log(
-          '[whatsapp] Zenvia (fallback): falhou — HTTP ' + status + ' — resposta: ' + responseText,
-        )
-        throw new Error('HTTP ' + status + ' — ' + responseText)
-      }
-      console.log('[whatsapp] Zenvia (fallback): envio OK (destinatário ' + digits + ')')
-      result = { status: status }
-    } catch (err) {
-      console.log('[whatsapp] Zenvia (fallback) também falhou:', err)
-      throw new BadRequestError('Falha ao enviar mensagem via Meta e via Zenvia: ' + err)
-    }
+    console.log('[whatsapp] Meta falhou (' + metaErr + ')')
+    throw new BadRequestError('Falha ao enviar mensagem via Meta: ' + metaErr)
   }
 
   const message = new Record(app.findCollectionByNameOrId('whatsapp_messages'))
@@ -642,6 +538,6 @@ routerAdd('POST', '/backend/v1/crm/whatsapp/send', (e) => {
   return e.json(200, {
     ok: true,
     message_id: message.id,
-    channel: usedChannel,
+    channel: 'meta',
   })
 })

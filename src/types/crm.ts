@@ -358,8 +358,8 @@ export interface ServiceOrder {
 }
 
 export type WhatsAppTemplateKey = 'greeting' | 'menu'
-// Configurações de WhatsApp/Zenvia guardadas na mesma coleção de mensagens automáticas
-export type WhatsAppSettingKey = 'phone_number_id' | 'zenvia_api_token' | 'zenvia_sender'
+// Configurações de WhatsApp guardadas na mesma coleção de mensagens automáticas
+export type WhatsAppSettingKey = 'phone_number_id'
 export type WhatsAppStoredKey = WhatsAppTemplateKey | WhatsAppSettingKey
 
 export interface WhatsAppTemplate {
