@@ -154,10 +154,13 @@ routerAdd(
         },
         body: JSON.stringify(payload),
       })
-      // $http.send lança erro em status >= 400 e devolve { status_code, headers, body }.
-      const status = res.status_code || 0
-      if (status < 200 || status >= 300) {
-        throw new Error('Graph API respondeu status ' + status + ': ' + (res.body || 'sem corpo'))
+      // $http.send devolve { statusCode, raw, json, body (bytes), headers }.
+      // Sucesso: 2xx com o formato de sucesso da Graph API (contém "messages").
+      // res.body é um array de bytes — use res.raw (texto) para inspeção.
+      const status = res.statusCode || 0
+      const rawBody = String(res.raw || '')
+      if (status < 200 || status >= 300 || rawBody.indexOf('"messages"') === -1) {
+        throw new Error('Graph API respondeu status ' + status + ': ' + (rawBody || 'sem corpo'))
       }
       return res
     }
@@ -588,9 +591,13 @@ routerAdd('POST', '/backend/v1/crm/whatsapp/send', (e) => {
         },
         body: JSON.stringify(payload),
       })
-      const status = res.status_code || 0
-      if (status < 200 || status >= 300) {
-        throw new Error('Graph API respondeu status ' + status + ': ' + (res.body || 'sem corpo'))
+      // $http.send devolve { statusCode, raw, json, body (bytes), headers }.
+      // Sucesso: 2xx com o formato de sucesso da Graph API (contém "messages").
+      // res.body é um array de bytes — use res.raw (texto) para inspeção.
+      const status = res.statusCode || 0
+      const rawBody = String(res.raw || '')
+      if (status < 200 || status >= 300 || rawBody.indexOf('"messages"') === -1) {
+        throw new Error('Graph API respondeu status ' + status + ': ' + (rawBody || 'sem corpo'))
       }
     } else {
       const result = $connectors.executeAsOwner('WHATSAPP_SEND_MESSAGE', {

@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-10T01:20:15.452Z",
+  "generatedAt": "2026-11-10T01:25:17.987Z",
   "collections": [
     {
       "name": "users",
@@ -386,7 +386,7 @@
           "type": "select",
           "required": true,
           "system": false,
-          "selectValues": ["receivable", "payable"]
+          "selectValues": ["pending", "paid", "cancelled"]
         },
         {
           "name": "due_date",
