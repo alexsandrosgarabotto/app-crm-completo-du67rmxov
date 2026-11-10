@@ -75,6 +75,24 @@ routerAdd(
       return digits
     }
 
+    // Compara dois números brasileiros cobrindo a variação do nono dígito:
+    // a Meta entrega o MESMO celular às vezes como 55+DDD+8 dígitos (12 no
+    // total, ex. 556699830114) e às vezes como 55+DDD+9 dígitos (13, ex.
+    // 5566999830114). Depois de normalizePhone (sem DDI), o 9 extra fica no
+    // MEIO (6699830114 vs 66999830114), então endsWith sozinho não cobre.
+    // Critério: mesmo DDD (2 primeiros dígitos) + mesmos últimos 8 dígitos
+    // (parte local sem o nono dígito), exigindo pelo menos 10 dígitos em cada
+    // lado para evitar falsos positivos com números curtos/truncados.
+    const samePhone = (a, b) => {
+      const da = String(a || '')
+      const db = String(b || '')
+      if (!da || !db) return false
+      if (da === db) return true
+      if (da.length < 10 || db.length < 10) return false
+      if (da.slice(0, 2) !== db.slice(0, 2)) return false
+      return da.slice(-8) === db.slice(-8)
+    }
+
     // Número no formato com código do país, só dígitos (usado pelo
     // conector Skip): ex. 5565999998888.
     const toNumber = (raw) => {
@@ -293,7 +311,7 @@ routerAdd(
           try {
             const all = app.findRecordsByFilter('clients', "phone != ''", '-created', 500, 0)
             for (const record of all) {
-              if (normalizePhone(record.get('phone')) === target) {
+              if (samePhone(normalizePhone(record.get('phone')), target)) {
                 clientRecord = record
                 break
               }
@@ -315,7 +333,7 @@ routerAdd(
           try {
             const all = app.findRecordsByFilter('clients', "phone != ''", '-created', 500, 0)
             for (const record of all) {
-              if (normalizePhone(record.get('phone')) === target) {
+              if (samePhone(normalizePhone(record.get('phone')), target)) {
                 duplicate = record
                 break
               }
@@ -374,7 +392,7 @@ routerAdd(
               { clientId: clientRecord.id },
             )
             for (const record of all) {
-              if (normalizePhone(record.get('phone')) === normalized) {
+              if (samePhone(normalizePhone(record.get('phone')), normalized)) {
                 conversation = record
                 break
               }
@@ -449,17 +467,12 @@ routerAdd(
         let autoReplyAllowed = true
         if (validacaoApenas) {
           // Ambos normalizados sem DDI (+55) e sem formatação, cobrindo
-          // variações com/sem código do país.
+          // variações com/sem código do país. samePhone também cobre a
+          // variação do nono dígito (celular com 8 ou 9 dígitos locais):
+          // 556699830114 e 5566999830114 são o MESMO contato.
           const senderDigits = normalizePhone(rawPhone)
           const allowedDigits = normalizePhone(validacaoNumero)
-          // Cobre variações com/sem DDI: compara pelo final do número, sempre
-          // incluindo a comparação exata de dígitos.
-          const senderMatches =
-            senderDigits.length > 0 &&
-            allowedDigits.length > 0 &&
-            (senderDigits === allowedDigits ||
-              senderDigits.endsWith(allowedDigits) ||
-              allowedDigits.endsWith(senderDigits))
+          const senderMatches = samePhone(senderDigits, allowedDigits)
           autoReplyAllowed = senderMatches
           if (!senderMatches) {
             console.log(
