@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-10T14:03:47.717Z",
+  "generatedAt": "2026-11-10T22:09:59.468Z",
   "collections": [
     {
       "name": "users",
@@ -1337,6 +1337,12 @@
         {
           "name": "menu_sent_at",
           "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "awaiting_budget_data",
+          "type": "bool",
           "required": false,
           "system": false
         }

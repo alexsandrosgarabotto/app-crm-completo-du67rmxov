@@ -456,6 +456,70 @@ routerAdd(
         conversation.set('unread_count', (conversation.get('unread_count') || 0) + 1)
         app.save(conversation)
 
+        // --- Pedido de orçamento (opção 2) -> chamado (ordem de serviço) ---------
+        // A opção "2" deixa a conversa "aguardando dados do orçamento". A próxima
+        // mensagem de texto livre vira um chamado em service_orders (vinculado ao
+        // cliente e à conversa) e o estado é consumido, para que mensagens
+        // seguintes não dupliquem o chamado. Vale para qualquer cliente que siga
+        // o fluxo; o envio de respostas automáticas continua sujeito ao modo de
+        // validação (abaixo), que não é alterado aqui.
+        const awaitingBudgetData = conversation.get('awaiting_budget_data') === true
+        const setAwaitingBudgetData = (value) => {
+          conversation.set('awaiting_budget_data', value)
+          app.save(conversation)
+        }
+        const budgetOption = /^[1-4]$/.test(text.trim()) ? text.trim() : ''
+        if (budgetOption === '2') {
+          // Só vale se o menu já foi apresentado (a opção 2 foi de fato respondida).
+          if (String(conversation.get('menu_sent_at') || '') !== '') setAwaitingBudgetData(true)
+        } else if (budgetOption) {
+          if (awaitingBudgetData) setAwaitingBudgetData(false)
+        } else if (awaitingBudgetData) {
+          try {
+            // Próximo número sequencial: maior OS-NNNN existente + 1 (varre em
+            // páginas para não depender de um limite fixo).
+            let maxSeq = 0
+            let page = 0
+            while (true) {
+              const batch = app.findRecordsByFilter(
+                'service_orders',
+                "number != ''",
+                '-created',
+                500,
+                page * 500,
+              )
+              for (const order of batch) {
+                const m = /(\d+)$/.exec(String(order.get('number') || ''))
+                if (m && parseInt(m[1], 10) > maxSeq) maxSeq = parseInt(m[1], 10)
+              }
+              if (batch.length < 500) break
+              page++
+            }
+            const orderNumber = 'OS-' + String(maxSeq + 1).padStart(4, '0')
+            const orderRecord = new Record(app.findCollectionByNameOrId('service_orders'))
+            orderRecord.set('number', orderNumber)
+            orderRecord.set('client_id', clientRecord.id)
+            orderRecord.set('conversation_id', conversation.id)
+            orderRecord.set('status', 'aberta')
+            orderRecord.set('opened_at', nowIso)
+            orderRecord.set('problem_description', text)
+            orderRecord.set('stock_released', false)
+            app.save(orderRecord)
+            console.log(
+              '[whatsapp] Chamado ' +
+                orderNumber +
+                ' aberto via WhatsApp para cliente ' +
+                clientRecord.get('name') +
+                ' (' +
+                clientRecord.id +
+                ')',
+            )
+            setAwaitingBudgetData(false)
+          } catch (orderErr) {
+            console.log('[whatsapp] falha ao abrir chamado a partir do WhatsApp:', orderErr)
+          }
+        }
+
         // --- Modo de validação ---------------------------------------------------
         // Quando 'validacao_apenas' = true, SOMENTE o número autorizado (key
         // 'validacao_numero') recebe as respostas automáticas. Mensagens de
