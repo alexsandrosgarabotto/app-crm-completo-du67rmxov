@@ -359,7 +359,11 @@ export interface ServiceOrder {
 
 export type WhatsAppTemplateKey = 'greeting' | 'menu'
 // Configurações de WhatsApp guardadas na mesma coleção de mensagens automáticas
-export type WhatsAppSettingKey = 'phone_number_id' | 'meta_access_token'
+export type WhatsAppSettingKey =
+  | 'phone_number_id'
+  | 'meta_access_token'
+  | 'validacao_apenas'
+  | 'validacao_numero'
 export type WhatsAppStoredKey = WhatsAppTemplateKey | WhatsAppSettingKey
 
 export interface WhatsAppTemplate {

@@ -34,6 +34,7 @@ import {
 import { toast } from '@/hooks/use-toast'
 import { PhoneNumberIdCard } from '@/components/whatsapp/PhoneNumberIdCard'
 import { MetaAccessTokenCard } from '@/components/whatsapp/MetaAccessTokenCard'
+import { ValidationModeCard } from '@/components/whatsapp/ValidationModeCard'
 
 const templateMeta: Record<WhatsAppTemplateKey, { title: string; hint: string }> = {
   greeting: {
@@ -141,6 +142,8 @@ function AutomaticMessagesTab() {
       <PhoneNumberIdCard />
 
       <MetaAccessTokenCard />
+
+      <ValidationModeCard />
 
       {loading ? (
         <div className="p-10 text-center text-slate-500 bg-white rounded-xl border border-slate-200">

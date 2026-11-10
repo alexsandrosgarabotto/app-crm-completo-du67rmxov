@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-10T11:31:54.918Z",
+  "generatedAt": "2026-11-10T13:18:18.397Z",
   "collections": [
     {
       "name": "users",
@@ -1554,7 +1554,15 @@
           "type": "select",
           "required": true,
           "system": false,
-          "selectValues": ["greeting", "menu", "phone_number_id", "meta_access_token", "horarios"]
+          "selectValues": [
+            "greeting",
+            "menu",
+            "phone_number_id",
+            "meta_access_token",
+            "horarios",
+            "validacao_apenas",
+            "validacao_numero"
+          ]
         },
         {
           "name": "body",

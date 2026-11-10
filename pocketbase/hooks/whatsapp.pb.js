@@ -438,6 +438,38 @@ routerAdd(
         conversation.set('unread_count', (conversation.get('unread_count') || 0) + 1)
         app.save(conversation)
 
+        // --- Modo de validação ---------------------------------------------------
+        // Quando 'validacao_apenas' = true, SOMENTE o número autorizado (key
+        // 'validacao_numero') recebe as respostas automáticas. Mensagens de
+        // qualquer outro número já foram gravadas acima (cliente, conversa e
+        // mensagem inbound) e ficam para o atendente responder manualmente —
+        // nem menu nem texto automático sai para elas.
+        const validacaoApenas = readConfig('validacao_apenas').toLowerCase() === 'true'
+        const validacaoNumero = String(readConfig('validacao_numero') || '').replace(/\D/g, '')
+        let autoReplyAllowed = true
+        if (validacaoApenas) {
+          // Ambos normalizados sem DDI (+55) e sem formatação, cobrindo
+          // variações com/sem código do país.
+          const senderDigits = normalizePhone(rawPhone)
+          const allowedDigits = normalizePhone(validacaoNumero)
+          // Cobre variações com/sem DDI: compara pelo final do número, sempre
+          // incluindo a comparação exata de dígitos.
+          const senderMatches =
+            senderDigits.length > 0 &&
+            allowedDigits.length > 0 &&
+            (senderDigits === allowedDigits ||
+              senderDigits.endsWith(allowedDigits) ||
+              allowedDigits.endsWith(senderDigits))
+          autoReplyAllowed = senderMatches
+          if (!senderMatches) {
+            console.log(
+              '[whatsapp] Modo validação: mensagem de ' +
+                rawPhone +
+                ' registrada sem resposta automática',
+            )
+          }
+        }
+
         // --- Máquina de estados do menu por conversa ---------------------------
         // A saudação + menu sai UMA vez por conversa; depois, cada mensagem do
         // cliente recebe a resposta da opção escolhida (1-4) ou fica para o
@@ -498,7 +530,10 @@ routerAdd(
         let sentOk = false
         let sendError = ''
 
-        if (!menuPresented && !option) {
+        if (!autoReplyAllowed) {
+          // Modo validação: remetente fora da lista de teste — nada sai.
+          // A mensagem já foi gravada; fica para atendimento manual.
+        } else if (!menuPresented && !option) {
           // Primeira mensagem da conversa (ou a conversa ainda não recebeu o
           // menu): manda saudação + menu e marca o estado. Uma conversa
           // começando com texto livre ("Bom dia") também cai aqui — e só aqui.
