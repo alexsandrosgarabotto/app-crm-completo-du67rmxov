@@ -168,6 +168,20 @@ routerAdd(
     // Envio pelo canal Meta: token próprio (Graph API direta) quando
     // configurado; sem token, mantém o conector Skip. Falhas são apenas
     // registradas nos logs.
+    const metaFailureHint = (err) => {
+      const raw = String((err && err.message) || err || '')
+      // 401 / code 190 = token de acesso da Meta inválido ou expirado
+      // (validade ~60 dias): o dono precisa gerar um novo token.
+      if (
+        raw.indexOf('status 401') !== -1 ||
+        raw.indexOf('code 190') !== -1 ||
+        raw.indexOf('"code":190') !== -1
+      ) {
+        return 'Meta falhou: token inválido ou expirado — gere um novo token (Token de acesso Meta em Configurações)'
+      }
+      return ''
+    }
+
     const sendWhatsApp = (to, text) => {
       const accessToken = readMetaAccessToken()
       const via = accessToken
@@ -180,7 +194,12 @@ routerAdd(
         )
         return result
       } catch (metaErr) {
-        console.log('[whatsapp] Meta falhou (' + metaErr + ', via ' + via + ')')
+        const hint = metaFailureHint(metaErr)
+        if (hint) {
+          console.log('[whatsapp] ' + hint + ' (via ' + via + ')')
+        } else {
+          console.log('[whatsapp] Meta falhou (' + metaErr + ', via ' + via + ')')
+        }
         throw metaErr
       }
     }
@@ -419,29 +438,21 @@ routerAdd(
         conversation.set('unread_count', (conversation.get('unread_count') || 0) + 1)
         app.save(conversation)
 
-        // Resposta automática como atendente humano: os textos vêm da coleção
-        // whatsapp_templates (editáveis em Configurações).
-        // Placeholders: {{nome}}, {{nome_completo}}, {{saudacao}}, {{telefone}}
+        // --- Máquina de estados do menu por conversa ---------------------------
+        // A saudação + menu sai UMA vez por conversa; depois, cada mensagem do
+        // cliente recebe a resposta da opção escolhida (1-4) ou fica para o
+        // atendente responder manualmente (texto livre).
+        const menuPresented = String(conversation.get('menu_sent_at') || '') !== ''
+        const trimmed = text.trim()
+        const option = /^[1-4]$/.test(trimmed) ? trimmed : ''
+
+        // Textos da resposta automática: vem da coleção whatsapp_templates
+        // (editáveis em Configurações). Placeholders: {{nome}},
+        // {{nome_completo}}, {{saudacao}}, {{telefone}}
         const hour = new Date().getHours()
         let greetingWord = 'Boa noite'
         if (hour >= 5 && hour < 12) greetingWord = 'Bom dia'
         else if (hour >= 12 && hour < 18) greetingWord = 'Boa tarde'
-
-        let templateBody = ''
-        try {
-          const tpl = app.findRecordsByFilter('whatsapp_templates', "key = 'greeting'", '', 1, 0)
-          if (tpl.length > 0) templateBody = String(tpl[0].get('body') || '')
-        } catch (_) {}
-        if (!templateBody) {
-          templateBody =
-            '{{saudacao}}{{nome}}! Aqui é da equipe de atendimento. Recebemos sua mensagem e já estamos te respondendo. Em que podemos ajudar?'
-        }
-
-        let menuBody = ''
-        try {
-          const tpl = app.findRecordsByFilter('whatsapp_templates', "key = 'menu'", '', 1, 0)
-          if (tpl.length > 0) menuBody = String(tpl[0].get('body') || '')
-        } catch (_) {}
 
         const clientName = String(clientRecord.get('name') || contactName || '').trim()
         const firstName = clientName.split(' ')[0] || ''
@@ -459,46 +470,92 @@ routerAdd(
             .replace(/\{\{\s*telefone\s*\}\}/g, prettyPhone)
         }
 
-        const reply = applyPlaceholders(templateBody)
+        const readTemplate = (key, fallback) => {
+          let body = ''
+          try {
+            const tpl = app.findRecordsByFilter('whatsapp_templates', 'key = {:key}', '', 1, 0, {
+              key: key,
+            })
+            if (tpl.length > 0) body = String(tpl[0].get('body') || '').trim()
+          } catch (_) {}
+          return body || fallback
+        }
 
-        let sentOk = false
-        let sendError = ''
-        try {
-          sendWhatsApp(rawPhone, reply)
-          sentOk = true
-
+        // Envia um texto pelo canal Meta e grava a mensagem outbound na conversa.
+        const sendAutoReply = (body) => {
+          sendWhatsApp(rawPhone, body)
           const outboundRecord = new Record(messagesCollection)
           outboundRecord.set('conversation_id', conversation.id)
           outboundRecord.set('direction', 'outbound')
           outboundRecord.set('origin', 'auto')
-          outboundRecord.set('body', reply)
+          outboundRecord.set('body', body)
           app.save(outboundRecord)
-
-          conversation.set('last_message', reply)
+          conversation.set('last_message', body)
           conversation.set('last_message_at', new Date().toISOString())
           app.save(conversation)
+        }
 
-          // Menu de opções logo após a saudação (se estiver configurado).
-          if (menuBody) {
-            const menuText = applyPlaceholders(menuBody)
-            try {
-              sendWhatsApp(rawPhone, menuText)
-              const menuRecord = new Record(messagesCollection)
-              menuRecord.set('conversation_id', conversation.id)
-              menuRecord.set('direction', 'outbound')
-              menuRecord.set('origin', 'auto')
-              menuRecord.set('body', menuText)
-              app.save(menuRecord)
-            } catch (menuErr) {
-              console.log('[whatsapp] falha ao enviar menu automático:', menuErr)
-            }
-          }
-        } catch (sendErr) {
-          sendError = String(sendErr)
-          console.log(
-            '[whatsapp] aviso: resposta automática não enviada (verifique o Phone Number ID da Meta nas Configurações do CRM):',
-            sendErr,
+        let sentOk = false
+        let sendError = ''
+
+        if (!menuPresented && !option) {
+          // Primeira mensagem da conversa (ou a conversa ainda não recebeu o
+          // menu): manda saudação + menu e marca o estado. Uma conversa
+          // começando com texto livre ("Bom dia") também cai aqui — e só aqui.
+          const greetingText = applyPlaceholders(
+            readTemplate(
+              'greeting',
+              '{{saudacao}}{{nome}}! Aqui é da equipe de atendimento. Recebemos sua mensagem e já estamos te respondendo. Em que podemos ajudar?',
+            ),
           )
+          const menuText = applyPlaceholders(
+            readTemplate(
+              'menu',
+              'Digite o número da opção desejada:\n1 - Falar com um atendente\n2 - Solicitar um orçamento\n3 - Horários de atendimento\n4 - Outros assuntos',
+            ),
+          )
+          try {
+            sendAutoReply(greetingText)
+            if (menuText) {
+              sendAutoReply(menuText)
+            }
+            conversation.set('menu_sent_at', nowIso)
+            app.save(conversation)
+            sentOk = true
+          } catch (sendErr) {
+            sendError = String(sendErr)
+            console.log(
+              '[whatsapp] aviso: saudação/menu não enviados (o menu será reenviado na próxima mensagem, verifique o canal Meta nas Configurações do CRM):',
+              sendErr,
+            )
+          }
+        } else {
+          // Menu já apresentado (ou o cliente já digitou uma opção): responde
+          // conforme a opção, sem reenviar saudação + menu.
+          const replies = {
+            1: 'Obrigado{{nome}}! Um atendente já foi acionado e vai te responder em instantes. Pode descrever sua necessidade aqui mesmo.',
+            2: 'Perfeito{{nome}}! Para preparar seu orçamento, me diga: qual serviço você precisa, o endereço e o melhor horário para visita?',
+            3: readTemplate(
+              'horarios',
+              'Horários de atendimento: Segunda a Sexta, 7h às 18h. Sábado, 8h às 12h. Emergências 24h pelo telefone (66) 9973-3422.',
+            ),
+            4: 'Sem problemas{{nome}}! Escreva sua mensagem que nossa equipe responde assim que possível.',
+          }
+          const replyText = option ? applyPlaceholders(replies[option]) : ''
+          if (replyText) {
+            try {
+              sendAutoReply(replyText)
+              sentOk = true
+            } catch (sendErr) {
+              sendError = String(sendErr)
+              console.log('[whatsapp] aviso: resposta automática da opção não enviada:', sendErr)
+            }
+          } else {
+            console.log(
+              '[whatsapp] texto livre do cliente em conversa com menu já apresentado — registrando para atendimento manual:',
+              trimmed,
+            )
+          }
         }
 
         results.push({
@@ -570,6 +627,19 @@ routerAdd('POST', '/backend/v1/crm/whatsapp/send', (e) => {
   const via = accessToken
     ? 'token próprio (...' + String(accessToken).slice(-4) + ')'
     : 'conector Skip (fallback, sem token configurado)'
+  const metaFailureHint = (err) => {
+    const raw = String((err && err.message) || err || '')
+    // 401 / code 190 = token de acesso da Meta inválido ou expirado
+    // (validade ~60 dias): o dono precisa gerar um novo token.
+    if (
+      raw.indexOf('status 401') !== -1 ||
+      raw.indexOf('code 190') !== -1 ||
+      raw.indexOf('"code":190') !== -1
+    ) {
+      return 'Meta falhou: token inválido ou expirado — gere um novo token (Token de acesso Meta em Configurações)'
+    }
+    return ''
+  }
   try {
     if (!phoneNumberId) {
       throw new Error('Phone Number ID não configurado nas Configurações do CRM')
@@ -613,6 +683,11 @@ routerAdd('POST', '/backend/v1/crm/whatsapp/send', (e) => {
     }
     console.log('[whatsapp] Meta: envio OK (destinatário ' + digits + ', via ' + via + ')')
   } catch (metaErr) {
+    const hint = metaFailureHint(metaErr)
+    if (hint) {
+      console.log('[whatsapp] ' + hint + ' (via ' + via + ')')
+      throw new BadRequestError(hint)
+    }
     console.log('[whatsapp] Meta falhou (' + metaErr + ', via ' + via + ')')
     throw new BadRequestError('Falha ao enviar mensagem via Meta: ' + metaErr)
   }

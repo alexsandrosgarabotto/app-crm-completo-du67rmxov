@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-10T01:25:17.987Z",
+  "generatedAt": "2026-11-10T11:31:54.918Z",
   "collections": [
     {
       "name": "users",
@@ -1333,6 +1333,12 @@
           "required": false,
           "system": false,
           "autodateTriggers": ["onCreate", "onUpdate"]
+        },
+        {
+          "name": "menu_sent_at",
+          "type": "date",
+          "required": false,
+          "system": false
         }
       ],
       "indexes": [
@@ -1548,7 +1554,7 @@
           "type": "select",
           "required": true,
           "system": false,
-          "selectValues": ["greeting", "menu", "phone_number_id", "meta_access_token"]
+          "selectValues": ["greeting", "menu", "phone_number_id", "meta_access_token", "horarios"]
         },
         {
           "name": "body",
