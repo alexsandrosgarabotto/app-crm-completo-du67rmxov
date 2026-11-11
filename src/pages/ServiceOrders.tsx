@@ -8,6 +8,7 @@ import { servicesCatalogService } from '@/services/servicesCatalog'
 import {
   serviceOrdersService,
   serviceOrderStatusLabels,
+  serviceOrderFileUrl,
   OPEN_SERVICE_ORDER_STATUSES,
   type AvisoWhatsapp,
   type StockIssue,
@@ -36,6 +37,8 @@ import {
   Package,
   Clock,
   History,
+  Camera,
+  PenLine,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -61,6 +64,9 @@ import {
 } from '@/components/ui/table'
 import { toast } from '@/hooks/use-toast'
 import { cn } from '@/lib/utils'
+import { SignaturePad } from '@/components/serviceOrders/SignaturePad'
+import { PhotoReport } from '@/components/serviceOrders/PhotoReport'
+import { ServiceOrderClientData } from '@/components/serviceOrders/ServiceOrderClientData'
 
 const statusBadgeClasses: Record<ServiceOrderStatus, string> = {
   aberta: 'bg-blue-100 text-blue-800 hover:bg-blue-100 border-0',
@@ -159,6 +165,8 @@ export default function ServiceOrdersPage() {
   const [form, setForm] = useState<OrderFormState>(emptyForm())
   const [saving, setSaving] = useState(false)
   const [finalizeTarget, setFinalizeTarget] = useState<ServiceOrder | null>(null)
+  const [signatureDataUrl, setSignatureDataUrl] = useState<string | null>(null)
+  const [savingSignature, setSavingSignature] = useState(false)
   const [cancelTarget, setCancelTarget] = useState<ServiceOrder | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [searchParams, setSearchParams] = useSearchParams()
@@ -280,7 +288,44 @@ export default function ServiceOrdersPage() {
         : '',
       agendamento_hora: ag ? `${pad2(ag.getHours())}:${pad2(ag.getMinutes())}` : '',
     })
+    setSignatureDataUrl(null)
     setFormOpen(true)
+  }
+
+  // ---- Cliente da ficha (dados completos, salvos na coleção clients) ------
+  const editingClient = form.client_id ? clients.find((c) => c.id === form.client_id) : undefined
+
+  const handleClientSaved = (updated: Client) => {
+    setClients((prev) => prev.map((c) => (c.id === updated.id ? updated : c)))
+    // Atualiza também o snapshot na lista de OS, para o nome novo aparecer na tabela.
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.client_id === updated.id
+          ? {
+              ...o,
+              expand: { ...o.expand, client_id: updated },
+            }
+          : o,
+      ),
+    )
+    toast({ title: 'Dados do cliente atualizados no cadastro' })
+  }
+
+  // ---- Fotos (relatório fotográfico) --------------------------------------
+  const handleAddPhoto = async (file: File) => {
+    const order = editingOrder || orders.find((o) => o.id === form.id)
+    if (!order) throw new Error('Salve a OS antes de adicionar fotos.')
+    const updated = await serviceOrdersService.addPhoto(order, file)
+    setOrders((prev) => prev.map((o) => (o.id === updated.id ? updated : o)))
+    setForm((prev) => ({ ...prev }))
+  }
+
+  const handleRemovePhoto = async (filename: string) => {
+    const order = editingOrder || orders.find((o) => o.id === form.id)
+    if (!order) throw new Error('Salve a OS antes de remover fotos.')
+    const updated = await serviceOrdersService.removePhoto(order, filename)
+    setOrders((prev) => prev.map((o) => (o.id === updated.id ? updated : o)))
+    setForm((prev) => ({ ...prev }))
   }
 
   // ---- Itens -------------------------------------------------------------
@@ -947,6 +992,126 @@ export default function ServiceOrdersPage() {
                   ))}
                 </div>
               </div>
+            )}
+
+            {/* Dados do cliente (visíveis e editáveis; salvos na coleção clients) */}
+            {form.id && (
+              <div className="space-y-3 rounded-lg border border-slate-200 p-3 bg-slate-50/60">
+                <div className="flex items-center justify-between">
+                  <Label className="flex items-center gap-1.5">
+                    <UserIcon className="h-3.5 w-3.5 text-slate-400" /> Dados do cliente
+                  </Label>
+                  {editingClient && (
+                    <span className="text-[11px] text-slate-400">
+                      Salvo no cadastro de clientes
+                    </span>
+                  )}
+                </div>
+                <ServiceOrderClientData
+                  order={
+                    editingOrder || orders.find((o) => o.id === form.id) || ({} as ServiceOrder)
+                  }
+                  client={editingClient || null}
+                  onSaved={handleClientSaved}
+                />
+              </div>
+            )}
+
+            {/* Relatório fotográfico e assinatura (somente OS já salva) */}
+            {form.id && editingOrder && (
+              <>
+                <div className="space-y-3 rounded-lg border border-slate-200 p-3 bg-slate-50/60">
+                  <Label className="flex items-center gap-1.5">
+                    <Camera className="h-3.5 w-3.5 text-slate-400" /> Relatório fotográfico
+                  </Label>
+                  <PhotoReport
+                    order={editingOrder}
+                    onAddPhoto={handleAddPhoto}
+                    onRemovePhoto={handleRemovePhoto}
+                  />
+                </div>
+
+                <div className="space-y-3 rounded-lg border border-slate-200 p-3 bg-slate-50/60">
+                  <Label className="flex items-center gap-1.5">
+                    <PenLine className="h-3.5 w-3.5 text-slate-400" /> Assinatura do cliente
+                  </Label>
+                  {editingOrder.signature ? (
+                    <div className="flex items-start gap-3">
+                      <img
+                        src={serviceOrderFileUrl(editingOrder.id, editingOrder.signature)}
+                        alt={`Assinatura do cliente na OS ${editingOrder.number}`}
+                        className="h-24 rounded-md border bg-white object-contain"
+                      />
+                      <div className="space-y-2">
+                        <p className="text-xs text-slate-500">
+                          Assinatura salva nesta OS (
+                          {new Date(editingOrder.updated).toLocaleString('pt-BR')})
+                        </p>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setSignatureDataUrl('__new__')}
+                        >
+                          <PenLine className="h-4 w-4" />
+                          Assinar novamente
+                        </Button>
+                      </div>
+                    </div>
+                  ) : signatureDataUrl !== '__new__' ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setSignatureDataUrl('__new__')}
+                    >
+                      <PenLine className="h-4 w-4" /> Coletar assinatura
+                    </Button>
+                  ) : null}
+                  {signatureDataUrl === '__new__' && (
+                    <SignaturePad
+                      onChange={(dataUrl) => setSignatureDataUrl(dataUrl || '__new__')}
+                      className="pt-1"
+                    />
+                  )}
+                  {signatureDataUrl === '__new__' && (
+                    <div className="flex justify-end">
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="bg-emerald-600 hover:bg-emerald-700"
+                        disabled={savingSignature || !signatureDataUrl}
+                        onClick={async () => {
+                          const order = editingOrder
+                          if (!order || typeof signatureDataUrl !== 'string') return
+                          setSavingSignature(true)
+                          try {
+                            const updated = await serviceOrdersService.saveSignature(
+                              order,
+                              signatureDataUrl,
+                            )
+                            setOrders((prev) =>
+                              prev.map((o) => (o.id === updated.id ? updated : o)),
+                            )
+                            setSignatureDataUrl(null)
+                            toast({ title: 'Assinatura salva na OS' })
+                          } catch (err: any) {
+                            toast({
+                              title: 'Erro ao salvar assinatura',
+                              description: err?.message || 'Tente novamente.',
+                              variant: 'destructive',
+                            })
+                          } finally {
+                            setSavingSignature(false)
+                          }
+                        }}
+                      >
+                        {savingSignature ? 'Salvando...' : 'Salvar assinatura'}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </>
             )}
 
             {/* Itens */}

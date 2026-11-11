@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-11T13:09:11.811Z",
+  "generatedAt": "2026-11-11T16:20:33.581Z",
   "collections": [
     {
       "name": "users",
@@ -1558,6 +1558,24 @@
         {
           "name": "signature",
           "type": "file",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "client_name",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "client_phone",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "client_address",
+          "type": "text",
           "required": false,
           "system": false
         }

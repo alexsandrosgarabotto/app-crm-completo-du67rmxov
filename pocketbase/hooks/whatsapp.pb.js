@@ -504,7 +504,41 @@ routerAdd(
             orderRecord.set('opened_at', nowIso)
             orderRecord.set('problem_description', text)
             orderRecord.set('stock_released', false)
+            // Dados do cliente direto na OS (a ficha mostra/edita; edite no
+            // cadastro de clients): nome completo e telefone sempre; endereço
+            // completo se existir, complementado pelo que a mensagem do
+            // orçamento trouxer (clientes recém-criados chegam sem endereço).
+            const clientCidade = String(clientRecord.get('city') || '').trim()
+            const clientEstado = String(clientRecord.get('state') || '').trim()
+            const clientEndereco = String(clientRecord.get('address') || '').trim()
+            let enderecoOs = clientEndereco
+            if (clientCidade || clientEstado) {
+              enderecoOs =
+                (clientEndereco ? clientEndereco + ' — ' : '') +
+                [clientCidade, clientEstado].filter(Boolean).join('/')
+            }
+            if (!enderecoOs) {
+              const msgLimpa = text
+                .replace(/^\s*(ok|oi|ol[áa]|bom dia|boa tarde|boa noite)[^:\n]*[:\-]?\s*/i, '')
+                .trim()
+              enderecoOs = msgLimpa.length > 8 ? msgLimpa : ''
+            }
+            if (enderecoOs) orderRecord.set('client_address', enderecoOs)
+            const clientTelefone = String(clientRecord.get('phone') || '').trim()
+            if (clientTelefone) orderRecord.set('client_phone', clientTelefone)
+            const clientNome = String(clientRecord.get('name') || '').trim()
+            if (clientNome) orderRecord.set('client_name', clientNome)
             app.save(orderRecord)
+            console.log(
+              '[whatsapp] dados do cliente na OS ' +
+                orderNumber +
+                ': nome=' +
+                (clientNome || '-') +
+                ' | telefone=' +
+                (clientTelefone || '-') +
+                ' | endereco=' +
+                (enderecoOs || '-'),
+            )
             console.log(
               '[whatsapp] Chamado ' +
                 orderNumber +

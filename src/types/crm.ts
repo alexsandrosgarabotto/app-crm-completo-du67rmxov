@@ -364,6 +364,10 @@ export interface ServiceOrder {
   photos?: string[]
   /** Nome do arquivo PNG da assinatura do cliente (storage do backend). */
   signature?: string
+  /** Snapshot dos dados do cliente na abertura (editável na ficha). */
+  client_name?: string
+  client_phone?: string
+  client_address?: string
   created: string
   updated: string
   expand?: {

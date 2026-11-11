@@ -34,6 +34,15 @@ export const OPEN_SERVICE_ORDER_STATUSES: ServiceOrderStatus[] = [
   'aguardando_peca',
 ]
 
+/** URL pública de um arquivo da OS (fotos / assinatura) no storage do backend. */
+export function serviceOrderFileUrl(orderId: string, filename: string, thumb?: string): string {
+  const base = pb.files.getURL(
+    { id: orderId, collectionId: 'service_orders', collectionName: 'service_orders' },
+    filename,
+  )
+  return thumb ? `${base}?thumb=${thumb}` : base
+}
+
 export const serviceOrdersService = {
   async getAll(): Promise<ServiceOrder[]> {
     return await pb.collection('service_orders').getFullList<ServiceOrder>({
@@ -102,6 +111,36 @@ export const serviceOrdersService = {
       const fallback = Date.now().toString().slice(-6)
       return `OS-${fallback}`
     }
+  },
+
+  /**
+   * Adiciona UMA foto ao relatório fotográfico da OS (upload real via
+   * FormData — o arquivo vai para o storage do backend, nunca base64).
+   */
+  async addPhoto(order: ServiceOrder, file: File): Promise<ServiceOrder> {
+    const formData = new FormData()
+    formData.append('photos', file)
+    const existing = (order.photos || []).filter((n) => n && n.length > 0)
+    if (existing.length > 0) {
+      formData.append('photos', JSON.stringify(existing))
+    }
+    return await pb.collection('service_orders').update<ServiceOrder>(order.id, formData)
+  },
+
+  /** Remove UMA foto do relatório fotográfico (pelo nome do arquivo). */
+  async removePhoto(order: ServiceOrder, filename: string): Promise<ServiceOrder> {
+    const remaining = (order.photos || []).filter((n) => n !== filename)
+    return await pb.collection('service_orders').update<ServiceOrder>(order.id, {
+      photos: remaining,
+    })
+  },
+
+  /** Salva a assinatura do cliente (PNG gerado do canvas) na OS. */
+  async saveSignature(order: ServiceOrder, dataUrl: string): Promise<ServiceOrder> {
+    const blob = dataUrlToBlob(dataUrl)
+    const formData = new FormData()
+    formData.append('signature', blob, `assinatura-${order.id}.png`)
+    return await pb.collection('service_orders').update<ServiceOrder>(order.id, formData)
   },
 
   /**
@@ -292,4 +331,17 @@ export const serviceOrdersService = {
     )
     return avisada
   },
+}
+
+/** Converte um data URL (canvas.toDataURL('image/png')) em Blob. */
+function dataUrlToBlob(dataUrl: string): Blob {
+  const [meta, base64] = dataUrl.split(',')
+  const mimeMatch = /data:([^;]+)/.exec(meta)
+  const mime = mimeMatch ? mimeMatch[1] : 'image/png'
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  return new Blob([bytes], { type: mime })
 }
