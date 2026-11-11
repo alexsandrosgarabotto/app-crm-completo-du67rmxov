@@ -166,6 +166,7 @@ export default function ServiceOrdersPage() {
   const [saving, setSaving] = useState(false)
   const [finalizeTarget, setFinalizeTarget] = useState<ServiceOrder | null>(null)
   const [signatureDataUrl, setSignatureDataUrl] = useState<string | null>(null)
+  const [signaturePadOpen, setSignaturePadOpen] = useState(false)
   const [savingSignature, setSavingSignature] = useState(false)
   const [cancelTarget, setCancelTarget] = useState<ServiceOrder | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -289,6 +290,7 @@ export default function ServiceOrdersPage() {
       agendamento_hora: ag ? `${pad2(ag.getHours())}:${pad2(ag.getMinutes())}` : '',
     })
     setSignatureDataUrl(null)
+    setSignaturePadOpen(false)
     setFormOpen(true)
   }
 
@@ -1051,30 +1053,36 @@ export default function ServiceOrdersPage() {
                           type="button"
                           variant="outline"
                           size="sm"
-                          onClick={() => setSignatureDataUrl('__new__')}
+                          onClick={() => {
+                            setSignatureDataUrl(null)
+                            setSignaturePadOpen(true)
+                          }}
                         >
                           <PenLine className="h-4 w-4" />
                           Assinar novamente
                         </Button>
                       </div>
                     </div>
-                  ) : signatureDataUrl !== '__new__' ? (
+                  ) : !signaturePadOpen ? (
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
-                      onClick={() => setSignatureDataUrl('__new__')}
+                      onClick={() => {
+                        setSignatureDataUrl(null)
+                        setSignaturePadOpen(true)
+                      }}
                     >
                       <PenLine className="h-4 w-4" /> Coletar assinatura
                     </Button>
                   ) : null}
-                  {signatureDataUrl === '__new__' && (
+                  {signaturePadOpen && (
                     <SignaturePad
-                      onChange={(dataUrl) => setSignatureDataUrl(dataUrl || '__new__')}
+                      onChange={(dataUrl) => setSignatureDataUrl(dataUrl)}
                       className="pt-1"
                     />
                   )}
-                  {signatureDataUrl === '__new__' && (
+                  {signaturePadOpen && (
                     <div className="flex justify-end">
                       <Button
                         type="button"
@@ -1094,6 +1102,7 @@ export default function ServiceOrdersPage() {
                               prev.map((o) => (o.id === updated.id ? updated : o)),
                             )
                             setSignatureDataUrl(null)
+                            setSignaturePadOpen(false)
                             toast({ title: 'Assinatura salva na OS' })
                           } catch (err: any) {
                             toast({
