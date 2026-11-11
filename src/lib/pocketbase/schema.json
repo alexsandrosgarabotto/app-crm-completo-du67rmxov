@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-11T12:50:20.154Z",
+  "generatedAt": "2026-11-11T13:09:11.811Z",
   "collections": [
     {
       "name": "users",
@@ -1546,6 +1546,18 @@
         {
           "name": "historico",
           "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "photos",
+          "type": "file",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "signature",
+          "type": "file",
           "required": false,
           "system": false
         }

@@ -360,6 +360,10 @@ export interface ServiceOrder {
   created_by?: string
   agendamento_para?: string
   historico?: ServiceOrderStatusChange[]
+  /** Nomes dos arquivos de foto do relatório fotográfico (storage do backend). */
+  photos?: string[]
+  /** Nome do arquivo PNG da assinatura do cliente (storage do backend). */
+  signature?: string
   created: string
   updated: string
   expand?: {
