@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import pb from '@/lib/pocketbase/client'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '@/hooks/use-auth'
 import { clientsService } from '@/services/clients'
@@ -8,6 +9,7 @@ import {
   serviceOrdersService,
   serviceOrderStatusLabels,
   OPEN_SERVICE_ORDER_STATUSES,
+  type AvisoWhatsapp,
   type StockIssue,
 } from '@/services/serviceOrders'
 import type {
@@ -17,11 +19,12 @@ import type {
   ServiceOrder,
   ServiceOrderItem,
   ServiceOrderStatus,
+  User,
 } from '@/types/crm'
 import {
   Plus,
   ClipboardList,
-  User,
+  User as UserIcon,
   Calendar,
   Pencil,
   Trash2,
@@ -31,6 +34,8 @@ import {
   Search,
   Wrench,
   Package,
+  Clock,
+  History,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -65,6 +70,25 @@ const statusBadgeClasses: Record<ServiceOrderStatus, string> = {
   cancelada: 'bg-rose-100 text-rose-800 hover:bg-rose-100 border-0',
 }
 
+/** Feedback do aviso de WhatsApp, por resultado devolvido pelo hook backend. */
+const avisoFeedback: Record<AvisoWhatsapp, { ok: boolean; text: string }> = {
+  enviado: { ok: true, text: 'Aviso enviado ao cliente pelo WhatsApp.' },
+  fora_da_janela: {
+    ok: false,
+    text: 'Aviso NÃO saiu: conversa fora da janela de 24h do WhatsApp.',
+  },
+  modo_validacao: {
+    ok: false,
+    text: 'Aviso NÃO saiu: modo de validação ativo (só o contato de teste recebe).',
+  },
+  sem_telefone: { ok: false, text: 'Aviso NÃO saiu: cliente sem telefone cadastrado.' },
+  sem_conversa: {
+    ok: false,
+    text: 'Aviso NÃO saiu: nenhuma conversa WhatsApp encontrada para este cliente.',
+  },
+  falhou: { ok: false, text: 'Falha ao enviar o aviso de WhatsApp (verifique o canal Meta).' },
+}
+
 const emptyItem = (): ServiceOrderItem => ({
   item_type: 'product',
   product_id: undefined,
@@ -89,6 +113,8 @@ interface OrderFormState {
   invoice_id?: string
   finished_at?: string
   conversation_id?: string
+  agendamento_data: string
+  agendamento_hora: string
 }
 
 const emptyForm = (): OrderFormState => ({
@@ -99,7 +125,11 @@ const emptyForm = (): OrderFormState => ({
   problem_description: '',
   notes: '',
   items: [emptyItem()],
+  agendamento_data: '',
+  agendamento_hora: '',
 })
+
+const pad2 = (n: number) => String(n).padStart(2, '0')
 
 export default function ServiceOrdersPage() {
   const { user } = useAuth()
@@ -107,6 +137,11 @@ export default function ServiceOrdersPage() {
   const [clients, setClients] = useState<Client[]>([])
   const [products, setProducts] = useState<Product[]>([])
   const [services, setServices] = useState<Service[]>([])
+  const [users, setUsers] = useState<User[]>([])
+  const [busyStatusId, setBusyStatusId] = useState<string | null>(null)
+  const [avisoInfo, setAvisoInfo] = useState<{ whatsapp: AvisoWhatsapp; erro?: string } | null>(
+    null,
+  )
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | ServiceOrderStatus>('all')
@@ -152,16 +187,21 @@ export default function ServiceOrdersPage() {
   const loadAll = async () => {
     setLoading(true)
     try {
-      const [ordersData, clientsData, productsData, servicesData] = await Promise.all([
+      const [ordersData, clientsData, productsData, servicesData, usersData] = await Promise.all([
         serviceOrdersService.getAll(),
         clientsService.getAll(),
         stockService.getProducts(),
         servicesCatalogService.getAll(),
+        pb
+          .collection('users')
+          .getFullList<User>({ sort: 'name' })
+          .catch(() => [] as User[]),
       ])
       setOrders(ordersData)
       setClients(clientsData)
       setProducts(productsData)
       setServices(servicesData)
+      setUsers(usersData)
     } catch (err) {
       console.error(err)
       toast({
@@ -219,6 +259,8 @@ export default function ServiceOrdersPage() {
   }
 
   const openEdit = (order: ServiceOrder) => {
+    setAvisoInfo(null)
+    const ag = order.agendamento_para ? new Date(order.agendamento_para) : null
     setForm({
       id: order.id,
       number: order.number,
@@ -233,6 +275,10 @@ export default function ServiceOrdersPage() {
       invoice_id: order.invoice_id,
       finished_at: order.finished_at,
       conversation_id: order.conversation_id,
+      agendamento_data: ag
+        ? `${ag.getFullYear()}-${pad2(ag.getMonth() + 1)}-${pad2(ag.getDate())}`
+        : '',
+      agendamento_hora: ag ? `${pad2(ag.getHours())}:${pad2(ag.getMinutes())}` : '',
     })
     setFormOpen(true)
   }
@@ -341,6 +387,9 @@ export default function ServiceOrdersPage() {
       items,
       total_value: total,
       conversation_id: form.conversation_id || undefined,
+      agendamento_para: form.agendamento_data
+        ? new Date(`${form.agendamento_data}T${form.agendamento_hora || '09:00'}:00`).toISOString()
+        : undefined,
     }
 
     try {
@@ -361,6 +410,49 @@ export default function ServiceOrdersPage() {
       })
     } finally {
       setSaving(false)
+    }
+  }
+
+  /**
+   * Mudança de status pela ficha: grava no histórico e dispara o aviso de
+   * WhatsApp ao cliente (rota do hook backend, canal Meta primário).
+   */
+  const handleStatusChange = async (novo: ServiceOrderStatus) => {
+    if (!form.id) return
+    const order = orders.find((o) => o.id === form.id)
+    if (!order || order.status === novo) {
+      setForm((prev) => ({ ...prev, status: novo }))
+      return
+    }
+    setBusyStatusId(order.id)
+    setAvisoInfo(null)
+    try {
+      const {
+        order: updated,
+        whatsapp,
+        whatsappErro,
+      } = await serviceOrdersService.changeStatus(
+        order,
+        novo,
+        user ? { id: user.id, name: user.name } : undefined,
+      )
+      setForm((prev) => ({ ...prev, status: updated.status }))
+      setAvisoInfo({ whatsapp, erro: whatsappErro })
+      const feedback = avisoFeedback[whatsapp]
+      toast({
+        title: feedback.ok ? 'Status atualizado' : 'Status atualizado — aviso pendente',
+        description: feedback.text,
+        variant: feedback.ok ? 'default' : 'destructive',
+      })
+      await loadAll()
+    } catch (err: any) {
+      toast({
+        title: 'Erro ao mudar status',
+        description: err.message || 'Tente novamente.',
+        variant: 'destructive',
+      })
+    } finally {
+      setBusyStatusId(null)
     }
   }
 
@@ -436,6 +528,8 @@ export default function ServiceOrdersPage() {
       })
     }
   }
+
+  const editingOrder = form.id ? orders.find((o) => o.id === form.id) : undefined
 
   return (
     <div className="space-y-6">
@@ -699,9 +793,17 @@ export default function ServiceOrdersPage() {
                 <Label>Status</Label>
                 <select
                   value={form.status}
-                  onChange={(e) =>
-                    setForm((prev) => ({ ...prev, status: e.target.value as ServiceOrderStatus }))
-                  }
+                  disabled={busyStatusId === form.id}
+                  onChange={(e) => {
+                    const novo = e.target.value as ServiceOrderStatus
+                    if (form.id) {
+                      // Editando: a mudança de status passa pelo changeStatus
+                      // (histórico + aviso de WhatsApp no backend).
+                      handleStatusChange(novo)
+                    } else {
+                      setForm((prev) => ({ ...prev, status: novo }))
+                    }
+                  }}
                   className="w-full flex h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs"
                 >
                   {Object.entries(serviceOrderStatusLabels).map(([value, label]) => (
@@ -710,6 +812,11 @@ export default function ServiceOrdersPage() {
                     </option>
                   ))}
                 </select>
+                {form.id && (
+                  <p className="text-[11px] text-slate-400">
+                    Mudar aqui grava no histórico e avisa o cliente por WhatsApp.
+                  </p>
+                )}
               </div>
               <div className="space-y-1.5">
                 <Label>Data de abertura</Label>
@@ -720,14 +827,53 @@ export default function ServiceOrdersPage() {
                 />
               </div>
               <div className="space-y-1.5">
-                <Label>Responsável</Label>
+                <Label>Agendamento da visita</Label>
+                <div className="flex gap-2">
+                  <Input
+                    type="date"
+                    value={form.agendamento_data}
+                    onChange={(e) =>
+                      setForm((prev) => ({ ...prev, agendamento_data: e.target.value }))
+                    }
+                    className="flex-1"
+                  />
+                  <Input
+                    type="time"
+                    value={form.agendamento_hora}
+                    onChange={(e) =>
+                      setForm((prev) => ({ ...prev, agendamento_hora: e.target.value }))
+                    }
+                    className="w-28"
+                  />
+                </div>
+                {form.agendamento_data && (
+                  <p className="text-[11px] text-slate-400">
+                    Visita agendada para{' '}
+                    {new Date(
+                      `${form.agendamento_data}T${form.agendamento_hora || '09:00'}:00`,
+                    ).toLocaleString('pt-BR', {
+                      day: '2-digit',
+                      month: '2-digit',
+                      year: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </p>
+                )}
+              </div>
+              <div className="space-y-1.5">
+                <Label>Técnico responsável</Label>
                 <select
                   value={form.responsible_id}
                   onChange={(e) => setForm((prev) => ({ ...prev, responsible_id: e.target.value }))}
                   className="w-full flex h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs"
                 >
                   <option value="">Selecione (opcional)</option>
-                  <option value={user?.id || ''}>{user?.name || 'Eu'}</option>
+                  {users.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.name}
+                    </option>
+                  ))}
                 </select>
               </div>
               <div className="space-y-1.5 sm:col-span-2">
@@ -751,6 +897,57 @@ export default function ServiceOrdersPage() {
                 />
               </div>
             </div>
+
+            {/* Aviso de WhatsApp da última mudança de status */}
+            {avisoInfo && (
+              <div
+                className={cn(
+                  'rounded-lg border px-3 py-2 text-xs flex items-start gap-2',
+                  avisoFeedback[avisoInfo.whatsapp].ok
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                    : 'border-amber-200 bg-amber-50 text-amber-700',
+                )}
+              >
+                <Clock className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                <span>
+                  {avisoFeedback[avisoInfo.whatsapp].text}
+                  {avisoInfo.erro ? ` (${avisoInfo.erro})` : ''}
+                </span>
+              </div>
+            )}
+
+            {/* Histórico de mudanças (somente leitura) */}
+            {editingOrder && (editingOrder.historico || []).length > 0 && (
+              <div className="space-y-2">
+                <Label className="flex items-center gap-1.5">
+                  <History className="h-3.5 w-3.5 text-slate-400" /> Histórico de mudanças
+                </Label>
+                <div className="rounded-lg border border-slate-200 divide-y divide-slate-100 max-h-44 overflow-y-auto">
+                  {[...(editingOrder.historico || [])].reverse().map((h, i) => (
+                    <div
+                      key={i}
+                      className="px-3 py-2 text-xs text-slate-600 flex items-start gap-2"
+                    >
+                      <Clock className="h-3 w-3 mt-0.5 text-slate-400 shrink-0" />
+                      <div>
+                        <span className="font-medium text-slate-800">
+                          {serviceOrderStatusLabels[h.de as ServiceOrderStatus] || h.de || '—'} →{' '}
+                          {serviceOrderStatusLabels[h.para as ServiceOrderStatus] || h.para}
+                        </span>
+                        <span className="text-slate-400">
+                          {' '}
+                          · {new Date(h.quando).toLocaleString('pt-BR')}
+                        </span>
+                        {h.por_nome && <span className="text-slate-400"> · {h.por_nome}</span>}
+                        {h.aviso_whatsapp && (
+                          <span className="text-slate-400"> · WhatsApp: {h.aviso_whatsapp}</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Itens */}
             <div className="space-y-2">

@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-10T22:28:14.532Z",
+  "generatedAt": "2026-11-11T01:27:30.263Z",
   "collections": [
     {
       "name": "users",
@@ -1383,7 +1383,7 @@
           "type": "select",
           "required": true,
           "system": false,
-          "selectValues": ["auto", "manual"]
+          "selectValues": ["auto", "manual", "os"]
         },
         {
           "name": "body",

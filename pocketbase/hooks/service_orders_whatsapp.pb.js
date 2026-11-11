@@ -367,3 +367,262 @@ routerAdd(
     return e.json(200, response)
   } /* middlewares */,
 )
+
+// ---------------------------------------------------------------
+// Aviso na CRIAÇÃO da OS (manual pelo CRM ou automática via
+// WhatsApp, opção 2 de orçamento). Mesmo canal e mesmas regras da
+// rota acima: Meta primário (token próprio), modo de validação e
+// janela de 24h. Falha de envio NÃO derruba a criação da OS.
+// IMPORTANTE: a JSVM não expõe funções de top-level dentro dos
+// callbacks — os helpers são repetidos aqui de forma inline.
+// ---------------------------------------------------------------
+onRecordCreate((e) => {
+  const app = e.app
+  const order = e.record
+
+  try {
+    const readConfig = (key) => {
+      let value = ''
+      try {
+        const cfg = app.findRecordsByFilter('whatsapp_templates', 'key = {:key}', '', 1, 0, {
+          key: key,
+        })
+        if (cfg.length > 0) value = String(cfg[0].get('body') || '').trim()
+      } catch (_) {}
+      return value
+    }
+
+    const normalizePhone = (raw) => {
+      let digits = String(raw || '').replace(/\D/g, '')
+      if (!digits) return ''
+      if (digits.startsWith('55') && digits.length > 11) {
+        digits = digits.slice(2)
+      }
+      return digits
+    }
+
+    // Mesmo critério do hook de atendimento: mesmo DDD + mesmos últimos 8
+    // dígitos (cobre a variação do nono dígito da Meta, 12 vs 13 dígitos).
+    const samePhone = (a, b) => {
+      const da = String(a || '')
+      const db = String(b || '')
+      if (!da || !db) return false
+      if (da === db) return true
+      if (da.length < 10 || db.length < 10) return false
+      if (da.slice(0, 2) !== db.slice(0, 2)) return false
+      return da.slice(-8) === db.slice(-8)
+    }
+
+    const toNumber = (raw) => {
+      let digits = String(raw || '').replace(/\D/g, '')
+      if (digits && digits.length <= 11) {
+        digits = '55' + digits
+      }
+      return digits
+    }
+
+    const sendViaMetaGraphApi = (to, text) => {
+      const phoneNumberId = readConfig('phone_number_id')
+      const accessToken = readConfig('meta_access_token')
+      if (!phoneNumberId) {
+        throw new Error('Phone Number ID não configurado nas Configurações do CRM')
+      }
+      if (!accessToken) {
+        throw new Error('Token de acesso Meta não configurado nas Configurações do CRM')
+      }
+      const url = 'https://graph.facebook.com/v25.0/' + phoneNumberId + '/messages'
+      const payload = {
+        messaging_product: 'whatsapp',
+        to: toNumber(to),
+        type: 'text',
+        text: { body: String(text) },
+      }
+      const res = $http.send({
+        url: url,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer ' + accessToken,
+        },
+        body: JSON.stringify(payload),
+      })
+      // $http.send devolve { statusCode, raw, json, body (bytes) } — nunca
+      // status_code; res.raw é o corpo. Sucesso: 2xx com "messages".
+      const status = res.statusCode || 0
+      const rawBody = String(res.raw || '')
+      if (status < 200 || status >= 300 || rawBody.indexOf('"messages"') === -1) {
+        throw new Error('Graph API respondeu status ' + status + ': ' + (rawBody || 'sem corpo'))
+      }
+      return res
+    }
+
+    const sendViaConnector = (to, text) => {
+      const phoneNumberId = readConfig('phone_number_id')
+      if (!phoneNumberId) {
+        throw new Error('Phone Number ID não configurado nas Configurações do CRM')
+      }
+      const result = $connectors.executeAsOwner('WHATSAPP_SEND_MESSAGE', {
+        text: String(text),
+        to_number: toNumber(to),
+        phone_number_id: phoneNumberId,
+      })
+      if (!result || result.successful === false || (result.error && !result.data)) {
+        throw new Error(
+          String((result && result.error) || 'falha desconhecida no conector WhatsApp'),
+        )
+      }
+      return result
+    }
+
+    const sendWhatsApp = (to, text) => {
+      if (readConfig('meta_access_token')) {
+        sendViaMetaGraphApi(to, text)
+        console.log('[os-whatsapp] criação: Meta: envio OK (destinatário ' + toNumber(to) + ')')
+      } else {
+        sendViaConnector(to, text)
+        console.log('[os-whatsapp] criação: envio OK via conector Skip (sem token configurado)')
+      }
+    }
+
+    // --- Cliente, conversa e texto ------------------------------------------
+    let clientRecord = null
+    try {
+      clientRecord = app.findRecordById('clients', order.get('client_id'))
+    } catch (_) {}
+
+    const rawPhone = String((clientRecord && clientRecord.get('phone')) || '')
+    const orderNumber = String(order.get('number') || 'OS-0000')
+    if (!rawPhone) {
+      console.log(
+        '[os-whatsapp] OS ' + orderNumber + ': cliente sem telefone — aviso de criação não enviado',
+      )
+      e.next()
+      return
+    }
+
+    let conversation = null
+    if (String(order.get('conversation_id') || '') !== '') {
+      try {
+        conversation = app.findRecordById('whatsapp_conversations', order.get('conversation_id'))
+      } catch (_) {}
+    }
+    if (!conversation) {
+      try {
+        const found = app.findRecordsByFilter(
+          'whatsapp_conversations',
+          'client_id = {:clientId}',
+          '-created',
+          20,
+          0,
+          { clientId: order.get('client_id') },
+        )
+        const target = normalizePhone(rawPhone)
+        for (const record of found) {
+          if (samePhone(normalizePhone(record.get('phone')), target)) {
+            conversation = record
+            break
+          }
+        }
+      } catch (_) {}
+    }
+
+    // --- Modo de validação + janela de 24h ----------------------------------
+    const validacaoApenas = readConfig('validacao_apenas').toLowerCase() === 'true'
+    const validacaoNumero = String(readConfig('validacao_numero') || '').replace(/\D/g, '')
+    if (validacaoApenas && !samePhone(normalizePhone(rawPhone), normalizePhone(validacaoNumero))) {
+      console.log(
+        '[os-whatsapp] Modo validação: aviso de criação da OS ' +
+          orderNumber +
+          ' não enviado para ' +
+          toNumber(rawPhone),
+      )
+      e.next()
+      return
+    }
+
+    let inboundRecente = false
+    if (conversation) {
+      const limite = new Date(Date.now() - 24 * 60 * 60 * 1000)
+      const lastInbound = String(conversation.get('last_inbound_at') || '')
+      if (lastInbound) {
+        try {
+          inboundRecente = new Date(lastInbound) >= limite
+        } catch (_) {}
+      }
+    }
+    if (!conversation) {
+      console.log(
+        '[os-whatsapp] OS ' +
+          orderNumber +
+          ': sem conversa no WhatsApp — aviso de criação não enviado',
+      )
+      e.next()
+      return
+    }
+    if (!inboundRecente) {
+      console.log(
+        '[os-whatsapp] OS ' +
+          orderNumber +
+          ': fora da janela de 24h — aviso de criação não enviado',
+      )
+      e.next()
+      return
+    }
+
+    const statusNovo = String(order.get('status') || 'aberta')
+    const clientName = String((clientRecord && clientRecord.get('name')) || '').trim()
+    const primeiroNome = clientName.split(' ')[0] || ''
+    let quando = ''
+    const agendamento = String(order.get('agendamento_para') || '')
+    if (agendamento) {
+      try {
+        const d = new Date(agendamento)
+        quando =
+          ' Visita agendada para ' +
+          d.toLocaleDateString('pt-BR') +
+          ' às ' +
+          d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) +
+          '.'
+      } catch (_) {}
+    }
+    const texto =
+      statusNovo === 'aberta'
+        ? 'Recebemos seu pedido' +
+          (primeiroNome ? ', ' + primeiroNome : '') +
+          '! Sua ordem de serviço ' +
+          orderNumber +
+          ' foi aberta.' +
+          (quando ? ' ' + quando : '') +
+          ' Em breve entraremos em contato.'
+        : 'Sua ordem de serviço ' +
+          orderNumber +
+          ' foi registrada com status "' +
+          statusNovo +
+          '".' +
+          (quando ? ' ' + quando : '')
+
+    sendWhatsApp(rawPhone, texto)
+
+    // Grava a mensagem outbound na conversa do cliente.
+    const messagesCollection = app.findCollectionByNameOrId('whatsapp_messages')
+    const outboundRecord = new Record(messagesCollection)
+    outboundRecord.set('conversation_id', conversation.id)
+    outboundRecord.set('direction', 'outbound')
+    outboundRecord.set('origin', 'os')
+    outboundRecord.set('body', texto)
+    if (String(order.get('created_by') || '') !== '') {
+      outboundRecord.set('sent_by', order.get('created_by'))
+    }
+    app.save(outboundRecord)
+
+    conversation.set('last_message', texto)
+    conversation.set('last_message_at', new Date().toISOString())
+    conversation.set('unread_count', 0)
+    app.save(conversation)
+  } catch (err) {
+    // O aviso NÃO derruba a criação da OS.
+    console.log('[os-whatsapp] aviso de criação da OS não enviado:', err)
+  }
+
+  e.next()
+}, 'service_orders')
