@@ -535,6 +535,28 @@ export default function ServiceOrdersPage() {
     }
   }
 
+  // Finalização com (opcional) assinatura coletada no diálogo: salva a assinatura
+  // primeiro, quando houver, e depois segue o fluxo normal de finalização.
+  const handleFinalizeWithSignature = async (order: ServiceOrder) => {
+    if (signatureDataUrl) {
+      try {
+        const withSignature = await serviceOrdersService.saveSignature(order, signatureDataUrl)
+        setSignatureDataUrl(null)
+        setOrders((prev) => prev.map((o) => (o.id === withSignature.id ? withSignature : o)))
+        await handleFinalize(withSignature)
+        return
+      } catch (err: any) {
+        toast({
+          title: 'Erro ao salvar assinatura',
+          description: err?.message || 'Tente novamente.',
+          variant: 'destructive',
+        })
+        return
+      }
+    }
+    await handleFinalize(order)
+  }
+
   const handleCancel = async (order: ServiceOrder) => {
     setBusyId(order.id)
     try {
@@ -1275,13 +1297,32 @@ export default function ServiceOrdersPage() {
               será criada no financeiro.
             </DialogDescription>
           </DialogHeader>
+          <div className="space-y-2">
+            {finalizeTarget?.signature ? (
+              <div className="flex items-center gap-3 rounded-lg border border-slate-200 p-3 bg-slate-50/60">
+                <img
+                  src={serviceOrderFileUrl(finalizeTarget.id, finalizeTarget.signature)}
+                  alt={`Assinatura do cliente na OS ${finalizeTarget.number}`}
+                  className="h-16 rounded border bg-white object-contain"
+                />
+                <span className="text-xs text-slate-500">Assinatura já coletada nesta OS.</span>
+              </div>
+            ) : (
+              <>
+                <p className="text-xs text-slate-500">
+                  Assinatura do cliente (opcional) — pode ser coletada depois na ficha da OS.
+                </p>
+                <SignaturePad onChange={(dataUrl) => setSignatureDataUrl(dataUrl)} />
+              </>
+            )}
+          </div>
           <DialogFooter className="pt-3 border-t">
             <Button variant="outline" onClick={() => setFinalizeTarget(null)}>
               Voltar
             </Button>
             <Button
               className="bg-emerald-600 hover:bg-emerald-700"
-              onClick={() => finalizeTarget && handleFinalize(finalizeTarget)}
+              onClick={() => finalizeTarget && handleFinalizeWithSignature(finalizeTarget)}
               disabled={busyId === finalizeTarget?.id}
             >
               <CheckCircle2 className="h-4 w-4 mr-1.5" />
