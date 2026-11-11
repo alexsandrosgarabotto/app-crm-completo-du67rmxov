@@ -604,16 +604,53 @@ routerAdd(
           app.save(conversation)
         }
 
-        let sentOk = false
-        let sendError = ''
+        // Cumprimento simples do cliente ("bom dia", "boa tarde", "olá", "oi" e
+        // variações curtas tipo "Oi bom dia") REABRE o atendimento: responde de
+        // novo com saudação + menu, mesmo que o menu já tenha sido apresentado
+        // antes. Mensagem inbound, acionada pelo webhook — sem risco de loop.
+        // Aceita mensagens curtas formadas só por palavras de cumprimento
+        // ("Bom dia", "Olá", "Oi", "Oi bom dia", "Olá, tudo bem?").
+        const greetingWords = new Set([
+          'oi',
+          'oii',
+          'oiii',
+          'ola',
+          'olá',
+          'bom',
+          'boa',
+          'dia',
+          'tarde',
+          'noite',
+          'madrugada',
+          'opa',
+          'salve',
+          'ea',
+          'eae',
+          'eai',
+          'e',
+          'aí',
+          'ai',
+          'tudo',
+          'bem',
+          'td',
+          'beleza',
+          'blz',
+          'amigo',
+          'bomdia',
+        ])
+        const words = trimmed
+          .toLowerCase()
+          .replace(/[!?.,;:]/g, ' ')
+          .split(/\s+/)
+          .filter(Boolean)
+        const isGreeting =
+          option === '' &&
+          trimmed.length <= 60 &&
+          words.length > 0 &&
+          words.every((w) => greetingWords.has(w))
 
-        if (!autoReplyAllowed) {
-          // Modo validação: remetente fora da lista de teste — nada sai.
-          // A mensagem já foi gravada; fica para atendimento manual.
-        } else if (!menuPresented && !option) {
-          // Primeira mensagem da conversa (ou a conversa ainda não recebeu o
-          // menu): manda saudação + menu e marca o estado. Uma conversa
-          // começando com texto livre ("Bom dia") também cai aqui — e só aqui.
+        // Envia saudação + menu (textos de whatsapp_templates) e marca o estado.
+        const sendGreetingAndMenu = () => {
           const greetingText = applyPlaceholders(
             readTemplate(
               'greeting',
@@ -626,13 +663,44 @@ routerAdd(
               'Digite o número da opção desejada:\n1 - Falar com um atendente\n2 - Solicitar um orçamento\n3 - Horários de atendimento\n4 - Outros assuntos',
             ),
           )
+          sendAutoReply(greetingText)
+          if (menuText) {
+            sendAutoReply(menuText)
+          }
+          conversation.set('menu_sent_at', new Date().toISOString())
+          app.save(conversation)
+        }
+
+        let sentOk = false
+        let sendError = ''
+
+        if (!autoReplyAllowed) {
+          // Modo validação: remetente fora da lista de teste — nada sai.
+          // A mensagem já foi gravada; fica para atendimento manual.
+        } else if (isGreeting) {
+          // Cumprimento do cliente (em conversa nova ou já com menu
+          // apresentado): reabre o atendimento com saudação + menu.
           try {
-            sendAutoReply(greetingText)
-            if (menuText) {
-              sendAutoReply(menuText)
+            sendGreetingAndMenu()
+            sentOk = true
+            if (menuPresented) {
+              console.log(
+                '[whatsapp] cumprimento do cliente reabriu o atendimento — saudação + menu reenviados:',
+                trimmed,
+              )
             }
-            conversation.set('menu_sent_at', nowIso)
-            app.save(conversation)
+          } catch (sendErr) {
+            sendError = String(sendErr)
+            console.log(
+              '[whatsapp] aviso: saudação/menu não enviados (o menu será reenviado na próxima mensagem, verifique o canal Meta nas Configurações do CRM):',
+              sendErr,
+            )
+          }
+        } else if (!menuPresented && !option) {
+          // Primeira mensagem da conversa com texto livre que NÃO é
+          // cumprimento: manda saudação + menu e marca o estado.
+          try {
+            sendGreetingAndMenu()
             sentOk = true
           } catch (sendErr) {
             sendError = String(sendErr)
