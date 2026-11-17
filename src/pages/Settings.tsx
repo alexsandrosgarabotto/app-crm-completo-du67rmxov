@@ -35,6 +35,7 @@ import { toast } from '@/hooks/use-toast'
 import { PhoneNumberIdCard } from '@/components/whatsapp/PhoneNumberIdCard'
 import { MetaAccessTokenCard } from '@/components/whatsapp/MetaAccessTokenCard'
 import { ValidationModeCard } from '@/components/whatsapp/ValidationModeCard'
+import { TechniciansCard, ScheduleReservationsCard } from '@/components/settings/TechniciansCard'
 
 const templateMeta: Record<WhatsAppTemplateKey, { title: string; hint: string }> = {
   greeting: {
@@ -618,8 +619,10 @@ export default function SettingsPage() {
         </TabsContent>
 
         {/* ABA: MENSAGENS AUTOMÁTICAS */}
-        <TabsContent value="auto-messages" className="pt-4">
+        <TabsContent value="auto-messages" className="pt-4 space-y-4">
           <AutomaticMessagesTab />
+          <TechniciansCard />
+          <ScheduleReservationsCard />
         </TabsContent>
       </Tabs>
 

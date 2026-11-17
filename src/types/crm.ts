@@ -368,6 +368,10 @@ export interface ServiceOrder {
   client_name?: string
   client_phone?: string
   client_address?: string
+  /** Técnico principal da OS (id da coleção technicians). */
+  technician_id?: string
+  /** 'orcamento' ou 'visita_tecnica' (origem: opção 2 ou 3 do WhatsApp). */
+  order_type?: 'orcamento' | 'visita_tecnica' | ''
   created: string
   updated: string
   expand?: {
@@ -375,6 +379,35 @@ export interface ServiceOrder {
     responsible_id?: User
     created_by?: User
   }
+}
+
+export interface Technician {
+  id: string
+  name: string
+  phone?: string
+  active?: boolean
+  created: string
+  updated: string
+}
+
+export interface ScheduleReservation {
+  id: string
+  /** YYYY-MM-DD */
+  date: string
+  /** HH:mm; vazio = dia inteiro bloqueado. */
+  time?: string
+  reason?: string
+  created: string
+  updated: string
+}
+
+export interface Holiday {
+  id: string
+  /** YYYY-MM-DD */
+  date: string
+  name?: string
+  created: string
+  updated: string
 }
 
 export type WhatsAppTemplateKey = 'greeting' | 'menu'

@@ -456,104 +456,200 @@ routerAdd(
         conversation.set('unread_count', (conversation.get('unread_count') || 0) + 1)
         app.save(conversation)
 
-        // --- Pedido de orçamento (opção 2) -> chamado (ordem de serviço) ---------
-        // A opção "2" deixa a conversa "aguardando dados do orçamento". A próxima
-        // mensagem de texto livre vira um chamado em service_orders (vinculado ao
-        // cliente e à conversa) e o estado é consumido, para que mensagens
-        // seguintes não dupliquem o chamado. Vale para qualquer cliente que siga
-        // o fluxo; o envio de respostas automáticas continua sujeito ao modo de
-        // validação (abaixo), que não é alterado aqui.
-        const awaitingBudgetData = conversation.get('awaiting_budget_data') === true
-        const setAwaitingBudgetData = (value) => {
-          conversation.set('awaiting_budget_data', value)
+        // --- Agendamento conversacional (opções 2 = orçamento, 3 = visita) -------
+        // Fluxo: nome + telefone -> busca/confirmação de cadastro -> slots de
+        // agenda (seg-sex, 08:00/09:00/10:00, sem sábados/domingos/feriados/
+        // reservas, slots de 1h sem choque) -> criação da OS com o técnico
+        // principal (primeiro technician ativo). Estado na conversa:
+        // schedule_state ('awaiting_name' | 'awaiting_confirm' | 'awaiting_slot')
+        // + schedule_data (json) — migração 0023.
+        const SCHEDULE_SLOTS = ['08:00', '09:00', '10:00']
+        const SCHEDULE_MAX_SLOTS = 10
+        const WEEKDAY_NAMES = [
+          'Domingo',
+          'Segunda-feira',
+          'Terça-feira',
+          'Quarta-feira',
+          'Quinta-feira',
+          'Sexta-feira',
+          'Sábado',
+        ]
+
+        // Estado atual do fluxo (let: os handlers avançam/limpam o estado).
+        let scheduleState = String(conversation.get('schedule_state') || '')
+        let scheduleData = {}
+        const rawSchedData = conversation.get('schedule_data')
+        if (rawSchedData && typeof rawSchedData === 'object' && !Array.isArray(rawSchedData)) {
+          scheduleData = rawSchedData
+        } else if (typeof rawSchedData === 'string' && rawSchedData.trim() !== '') {
+          try {
+            scheduleData = JSON.parse(rawSchedData) || {}
+          } catch (_) {
+            scheduleData = {}
+          }
+        }
+        const saveScheduleState = () => {
+          conversation.set('schedule_state', scheduleState)
+          conversation.set('schedule_data', JSON.stringify(scheduleData))
           app.save(conversation)
         }
-        const budgetOption = /^[1-4]$/.test(text.trim()) ? text.trim() : ''
-        if (budgetOption === '2') {
-          // Só vale se o menu já foi apresentado (a opção 2 foi de fato respondida).
-          if (String(conversation.get('menu_sent_at') || '') !== '') setAwaitingBudgetData(true)
-        } else if (budgetOption) {
-          if (awaitingBudgetData) setAwaitingBudgetData(false)
-        } else if (awaitingBudgetData) {
-          try {
-            // Próximo número sequencial: maior OS-NNNN existente + 1 (varre em
-            // páginas para não depender de um limite fixo).
-            let maxSeq = 0
-            let page = 0
-            while (true) {
-              const batch = app.findRecordsByFilter(
-                'service_orders',
-                "number != ''",
-                '-created',
-                500,
-                page * 500,
-              )
-              for (const order of batch) {
-                const m = /(\d+)$/.exec(String(order.get('number') || ''))
-                if (m && parseInt(m[1], 10) > maxSeq) maxSeq = parseInt(m[1], 10)
-              }
-              if (batch.length < 500) break
-              page++
-            }
-            const orderNumber = 'OS-' + String(maxSeq + 1).padStart(4, '0')
-            const orderRecord = new Record(app.findCollectionByNameOrId('service_orders'))
-            orderRecord.set('number', orderNumber)
-            orderRecord.set('client_id', clientRecord.id)
-            orderRecord.set('conversation_id', conversation.id)
-            orderRecord.set('status', 'aberta')
-            orderRecord.set('opened_at', nowIso)
-            orderRecord.set('problem_description', text)
-            orderRecord.set('stock_released', false)
-            // Dados do cliente direto na OS (a ficha mostra/edita; edite no
-            // cadastro de clients): nome completo e telefone sempre; endereço
-            // completo se existir, complementado pelo que a mensagem do
-            // orçamento trouxer (clientes recém-criados chegam sem endereço).
-            const clientCidade = String(clientRecord.get('city') || '').trim()
-            const clientEstado = String(clientRecord.get('state') || '').trim()
-            const clientEndereco = String(clientRecord.get('address') || '').trim()
-            let enderecoOs = clientEndereco
-            if (clientCidade || clientEstado) {
-              enderecoOs =
-                (clientEndereco ? clientEndereco + ' — ' : '') +
-                [clientCidade, clientEstado].filter(Boolean).join('/')
-            }
-            if (!enderecoOs) {
-              const msgLimpa = text
-                .replace(/^\s*(ok|oi|ol[áa]|bom dia|boa tarde|boa noite)[^:\n]*[:\-]?\s*/i, '')
+        const clearScheduleState = () => {
+          scheduleState = ''
+          scheduleData = {}
+          conversation.set('schedule_state', '')
+          conversation.set('schedule_data', '')
+          app.save(conversation)
+        }
+
+        // Extrai nome + telefone de texto livre: telefone é o primeiro número
+        // de 10-13 dígitos (aceita (66) 99999-0000, 66 99999-0000 etc., com ou
+        // sem DDI 55); nome é o resto do texto.
+        const parseNameAndPhone = (raw) => {
+          const clean = String(raw || '').trim()
+          let phone = ''
+          let name = clean
+          const m = /(\d[\d\s().\-\/]{7,}\d)/.exec(clean)
+          if (m) {
+            let digits = m[1].replace(/\D/g, '')
+            if (digits.startsWith('55') && digits.length > 11) digits = digits.slice(2)
+            if (digits.length >= 10 && digits.length <= 13) phone = digits
+            name = (clean.slice(0, m.index) + ' ' + clean.slice(m.index + m[1].length))
+              .replace(/[\s,;:.()\-\/]+/g, ' ')
+              .trim()
+          }
+          if (!phone) {
+            const allDigits = clean.replace(/\D/g, '')
+            let d = allDigits
+            if (d.startsWith('55') && d.length > 11) d = d.slice(2)
+            if (d.length >= 10 && d.length <= 13) {
+              phone = d
+              name = clean
+                .replace(/[\d\s().\-\/]/g, ' ')
+                .replace(/\s+/g, ' ')
                 .trim()
-              enderecoOs = msgLimpa.length > 8 ? msgLimpa : ''
             }
-            if (enderecoOs) orderRecord.set('client_address', enderecoOs)
-            const clientTelefone = String(clientRecord.get('phone') || '').trim()
-            if (clientTelefone) orderRecord.set('client_phone', clientTelefone)
-            const clientNome = String(clientRecord.get('name') || '').trim()
-            if (clientNome) orderRecord.set('client_name', clientNome)
-            app.save(orderRecord)
-            console.log(
-              '[whatsapp] dados do cliente na OS ' +
-                orderNumber +
-                ': nome=' +
-                (clientNome || '-') +
-                ' | telefone=' +
-                (clientTelefone || '-') +
-                ' | endereco=' +
-                (enderecoOs || '-'),
+          }
+          return { name: name, phone: phone }
+        }
+
+        // "Segunda-feira, 24/11 às 08:00" a partir de '2025-11-24' + '08:00'.
+        const slotKeyLabel = (dateKey, time) => {
+          const parts = String(dateKey || '').split('-')
+          if (parts.length !== 3) return dateKey + ' ' + time
+          const d = new Date(
+            parseInt(parts[0], 10),
+            parseInt(parts[1], 10) - 1,
+            parseInt(parts[2], 10),
+          )
+          const weekday = WEEKDAY_NAMES[d.getDay()]
+          const dd = String(d.getDate()).padStart(2, '0')
+          const mm = String(d.getMonth() + 1).padStart(2, '0')
+          return weekday + ', ' + dd + '/' + mm + ' às ' + time
+        }
+
+        // Bloqueios de agenda: feriados, reservas (dia inteiro ou horário) e
+        // slots já ocupados por outras OS (scheduled_date + scheduled_time).
+        const loadScheduleBlockers = () => {
+          const holidaySet = {}
+          try {
+            const list = app.findRecordsByFilter('holidays', '', '', 500, 0)
+            for (const h of list) {
+              holidaySet[String(h.get('date') || '').slice(0, 10)] = true
+            }
+          } catch (_) {}
+          const reservedFull = {}
+          const reservedTimes = {}
+          try {
+            const list = app.findRecordsByFilter('schedule_reservations', '', '', 500, 0)
+            for (const r of list) {
+              const key = String(r.get('date') || '').slice(0, 10)
+              const time = String(r.get('time') || '').trim()
+              if (!key) continue
+              if (time) {
+                if (!reservedTimes[key]) reservedTimes[key] = {}
+                reservedTimes[key][time] = true
+              } else {
+                reservedFull[key] = true
+              }
+            }
+          } catch (_) {}
+          const busy = {}
+          try {
+            const list = app.findRecordsByFilter(
+              'service_orders',
+              "scheduled_date != ''",
+              '-created',
+              500,
+              0,
             )
-            console.log(
-              '[whatsapp] Chamado ' +
-                orderNumber +
-                ' aberto via WhatsApp para cliente ' +
-                clientRecord.get('name') +
-                ' (' +
-                clientRecord.id +
-                ')',
-            )
-            setAwaitingBudgetData(false)
-          } catch (orderErr) {
-            console.log('[whatsapp] falha ao abrir chamado a partir do WhatsApp:', orderErr)
+            for (const o of list) {
+              if (String(o.get('status') || '') === 'cancelada') continue
+              const key = String(o.get('scheduled_date') || '').slice(0, 10)
+              const time = String(o.get('scheduled_time') || '').trim()
+              if (!key || !time) continue
+              if (!busy[key]) busy[key] = {}
+              busy[key][time] = true
+            }
+          } catch (_) {}
+          return {
+            holidaySet: holidaySet,
+            reservedFull: reservedFull,
+            reservedTimes: reservedTimes,
+            busy: busy,
           }
         }
 
+        // Próximos slots livres: dias úteis (seg-sex) a partir de amanhã,
+        // horários de ponto 08:00/09:00/10:00 (intervalo mínimo de 1h garantido
+        // porque cada slot é de 1h e um slot ocupado não é ofertado).
+        const buildScheduleSlots = (blockers) => {
+          const slots = []
+          const day = new Date()
+          day.setHours(0, 0, 0, 0)
+          day.setDate(day.getDate() + 1)
+          for (let i = 0; i < 60 && slots.length < SCHEDULE_MAX_SLOTS; i++) {
+            const dow = day.getDay()
+            const key =
+              day.getFullYear() +
+              '-' +
+              String(day.getMonth() + 1).padStart(2, '0') +
+              '-' +
+              String(day.getDate()).padStart(2, '0')
+            day.setDate(day.getDate() + 1)
+            if (dow === 0 || dow === 6) continue
+            if (blockers.holidaySet[key]) continue
+            if (blockers.reservedFull[key]) continue
+            for (const time of SCHEDULE_SLOTS) {
+              if (slots.length >= SCHEDULE_MAX_SLOTS) break
+              if ((blockers.busy[key] || {})[time]) continue
+              if ((blockers.reservedTimes[key] || {})[time]) continue
+              slots.push({ date: key, time: time })
+            }
+          }
+          return slots
+        }
+
+        // Próximo número sequencial de OS: maior OS-NNNN existente + 1.
+        const nextOrderNumber = () => {
+          let maxSeq = 0
+          let page = 0
+          while (true) {
+            const batch = app.findRecordsByFilter(
+              'service_orders',
+              "number != ''",
+              '-created',
+              500,
+              page * 500,
+            )
+            for (const order of batch) {
+              const m = /(\d+)$/.exec(String(order.get('number') || ''))
+              if (m && parseInt(m[1], 10) > maxSeq) maxSeq = parseInt(m[1], 10)
+            }
+            if (batch.length < 500) break
+            page++
+          }
+          return 'OS-' + String(maxSeq + 1).padStart(4, '0')
+        }
         // --- Modo de validação ---------------------------------------------------
         // Quando 'validacao_apenas' = true, SOMENTE o número autorizado (key
         // 'validacao_numero') recebe as respostas automáticas. Mensagens de
@@ -694,7 +790,7 @@ routerAdd(
           const menuText = applyPlaceholders(
             readTemplate(
               'menu',
-              'Digite o número da opção desejada:\n1 - Falar com um atendente\n2 - Solicitar um orçamento\n3 - Horários de atendimento\n4 - Outros assuntos',
+              'Digite o número da opção desejada:\n1 - Falar com um atendente\n2 - Solicitar um orçamento\n3 - Agendar visita técnica\n4 - Outros assuntos',
             ),
           )
           sendAutoReply(greetingText)
@@ -708,9 +804,397 @@ routerAdd(
         let sentOk = false
         let sendError = ''
 
+        // --- Fluxo conversacional de agendamento (opções 2 e 3) -----------------
+        // 2 = orçamento, 3 = visita técnica. Estados em schedule_state:
+        // awaiting_name -> awaiting_confirm (ou awaiting_pick) -> awaiting_slot.
+        const ASK_NAME =
+          'Ótimo! Para começar, me confirme seu nome completo e o telefone com DDD (ex.: (66) 99999-0000):'
+        const GIVE_UP_TEXT =
+          'Não consegui entender sua resposta. Vou transferir para um atendente humano — ele vai te responder por aqui mesmo.'
+        const SCHEDULE_MAX_ATTEMPTS = 3
+
+        const formatPhonePretty = (phoneDigits) => {
+          const d = String(phoneDigits || '').replace(/\D/g, '')
+          if (d.length >= 10) {
+            return '(' + d.slice(0, 2) + ') ' + d.slice(2, -4) + '-' + d.slice(-4)
+          }
+          return String(phoneDigits || '')
+        }
+
+        const describeClient = (c) => {
+          const n = String(c.get('name') || '').trim()
+          const p = formatPhonePretty(String(c.get('phone') || '').trim())
+          const addr = String(c.get('address') || '').trim()
+          const city = String(c.get('city') || '').trim()
+          const state = String(c.get('state') || '').trim()
+          let fullAddr = addr
+          if (city || state) {
+            fullAddr = (addr ? addr + ' — ' : '') + [city, state].filter(Boolean).join('/')
+          }
+          return n + ', ' + (p || 'telefone não informado') + (fullAddr ? ', ' + fullAddr : '')
+        }
+
+        const matchesName = (clientName, typedName) => {
+          const a = String(clientName || '').toLowerCase()
+          const tokens = String(typedName || '')
+            .toLowerCase()
+            .split(/\s+/)
+            .filter((t) => t.length >= 3)
+          if (tokens.length === 0) return true
+          return tokens.some((t) => a.indexOf(t) !== -1)
+        }
+
+        const findClientsByPhone = (phoneDigits) => {
+          const norm = normalizePhone(phoneDigits)
+          const matches = []
+          try {
+            const all = app.findRecordsByFilter('clients', "phone != ''", '-created', 500, 0)
+            for (const record of all) {
+              if (samePhone(normalizePhone(record.get('phone')), norm)) matches.push(record)
+            }
+          } catch (_) {}
+          return matches
+        }
+
+        const scheduleIntro = (tipo) => {
+          scheduleState = 'awaiting_name'
+          scheduleData = { order_type: tipo, attempts: 0 }
+          saveScheduleState()
+          console.log(
+            '[whatsapp] fluxo de agendamento iniciado (opção ' +
+              (tipo === 'orcamento' ? '2' : '3') +
+              ', tipo ' +
+              tipo +
+              ') para ' +
+              rawPhone,
+          )
+          sendAutoReply(ASK_NAME)
+        }
+
+        const sendSlotList = () => {
+          const blockers = loadScheduleBlockers()
+          const slots = buildScheduleSlots(blockers)
+          if (slots.length === 0) {
+            sendAutoReply(
+              'No momento não tenho horários disponíveis nos próximos dias úteis. Registrei seu pedido e um atendente entrará em contato para combinar a melhor data.',
+            )
+            console.log('[whatsapp] agendamento: nenhum slot livre para ofertar')
+            return
+          }
+          scheduleData.slots = slots
+          scheduleData.attempts = 0
+          scheduleState = 'awaiting_slot'
+          saveScheduleState()
+          let list = 'Horários disponíveis:\n'
+          slots.forEach((s, i) => {
+            list += i + 1 + ') ' + slotKeyLabel(s.date, s.time) + '\n'
+          })
+          list += '\nResponda com o número da opção desejada:'
+          console.log(
+            '[whatsapp] agendamento: slots ofertados: ' +
+              slots.map((s) => s.date + ' ' + s.time).join(' | '),
+          )
+          sendAutoReply(list)
+        }
+
+        const createScheduledOrder = (clientRec, slot) => {
+          const orderNumber = nextOrderNumber()
+          const orderRecord = new Record(app.findCollectionByNameOrId('service_orders'))
+          orderRecord.set('number', orderNumber)
+          orderRecord.set('client_id', clientRec.id)
+          orderRecord.set('conversation_id', conversation.id)
+          orderRecord.set('status', 'aberta')
+          orderRecord.set('opened_at', new Date().toISOString())
+          orderRecord.set('order_type', String(scheduleData.order_type || 'orcamento'))
+          orderRecord.set(
+            'problem_description',
+            String(scheduleData.order_type) === 'visita_tecnica'
+              ? 'Visita técnica agendada via WhatsApp'
+              : 'Orçamento agendado via WhatsApp',
+          )
+          orderRecord.set('scheduled_date', slot.date)
+          orderRecord.set('scheduled_time', slot.time)
+          orderRecord.set('stock_released', false)
+          // Técnico principal: o primeiro técnico ativo cadastrado.
+          try {
+            const techs = app.findRecordsByFilter('technicians', 'active = true', 'created', 1, 0)
+            if (techs.length > 0) orderRecord.set('technician_id', techs[0].id)
+          } catch (_) {}
+          // Snapshot dos dados do cliente na OS.
+          const cNome = String(clientRec.get('name') || scheduleData.name || '').trim()
+          const cTelefone = String(clientRec.get('phone') || scheduleData.phone || '').trim()
+          const cEndereco = String(clientRec.get('address') || '').trim()
+          const cCidade = String(clientRec.get('city') || '').trim()
+          const cEstado = String(clientRec.get('state') || '').trim()
+          let enderecoOs = cEndereco
+          if (cCidade || cEstado) {
+            enderecoOs =
+              (cEndereco ? cEndereco + ' — ' : '') + [cCidade, cEstado].filter(Boolean).join('/')
+          }
+          if (cNome) orderRecord.set('client_name', cNome)
+          if (cTelefone) orderRecord.set('client_phone', cTelefone)
+          if (enderecoOs) orderRecord.set('client_address', enderecoOs)
+          app.save(orderRecord)
+          console.log(
+            '[whatsapp] OS criada via agendamento WhatsApp: id=' +
+              orderRecord.id +
+              ' ' +
+              orderNumber +
+              ' tipo=' +
+              (scheduleData.order_type || 'orcamento') +
+              ' slot=' +
+              slot.date +
+              ' ' +
+              slot.time +
+              ' cliente=' +
+              clientRec.id,
+          )
+          return orderRecord
+        }
+
+        const bumpAttempts = () => {
+          scheduleData.attempts = (scheduleData.attempts || 0) + 1
+          saveScheduleState()
+          return (scheduleData.attempts || 0) >= SCHEDULE_MAX_ATTEMPTS
+        }
+
+        const handleScheduleFlow = () => {
+          if (scheduleState === 'awaiting_name') {
+            const parsed = parseNameAndPhone(trimmed)
+            if (!parsed.phone || parsed.name.length < 3) {
+              if (bumpAttempts()) {
+                clearScheduleState()
+                sendAutoReply(GIVE_UP_TEXT)
+                return
+              }
+              sendAutoReply(
+                'Não entendi. Por favor, envie seu nome completo e o telefone com DDD (ex.: Maria Silva (66) 99999-0000):',
+              )
+              return
+            }
+            scheduleData.name = parsed.name
+            scheduleData.phone = parsed.phone
+            const phoneMatches = findClientsByPhone(parsed.phone)
+            const matches = phoneMatches.filter((c) => matchesName(c.get('name'), parsed.name))
+            if (matches.length === 1) {
+              const c = matches[0]
+              scheduleState = 'awaiting_confirm'
+              scheduleData.client_id = c.id
+              scheduleData.attempts = 0
+              saveScheduleState()
+              console.log(
+                '[whatsapp] agendamento: cadastro encontrado para ' +
+                  parsed.phone +
+                  ': client_id=' +
+                  c.id,
+              )
+              sendAutoReply(
+                'Encontrei o cadastro: ' +
+                  describeClient(c) +
+                  '. É você? Responda 1 para SIM ou 2 para NÃO.',
+              )
+            } else if (matches.length > 1) {
+              scheduleState = 'awaiting_pick'
+              scheduleData.candidate_ids = matches.map((c) => c.id)
+              scheduleData.attempts = 0
+              saveScheduleState()
+              console.log(
+                '[whatsapp] agendamento: vários cadastros encontrados (' +
+                  matches.length +
+                  ') para ' +
+                  parsed.phone,
+              )
+              let msg = 'Encontrei mais de um cadastro com esse telefone. Qual é você?\n'
+              matches.forEach((c, i) => {
+                msg += i + 1 + ') ' + describeClient(c) + '\n'
+              })
+              msg += '\nResponda com o número:'
+              sendAutoReply(msg)
+            } else {
+              scheduleState = 'awaiting_confirm'
+              scheduleData.client_id = ''
+              scheduleData.attempts = 0
+              saveScheduleState()
+              console.log(
+                '[whatsapp] agendamento: nenhum cadastro encontrado para ' +
+                  parsed.phone +
+                  ' — seguirá como novo cliente',
+              )
+              sendAutoReply(
+                'Não encontrei cadastro com esse telefone. Vou atender como novo cliente — confirme: ' +
+                  parsed.name +
+                  ', ' +
+                  formatPhonePretty(parsed.phone) +
+                  '? Responda 1 para SIM ou 2 para NÃO.',
+              )
+            }
+            return
+          }
+
+          if (scheduleState === 'awaiting_pick') {
+            const candidates = Array.isArray(scheduleData.candidate_ids)
+              ? scheduleData.candidate_ids
+              : []
+            const idx = parseInt(trimmed, 10)
+            if (idx >= 1 && idx <= candidates.length) {
+              let c = null
+              try {
+                c = app.findRecordById('clients', candidates[idx - 1])
+              } catch (_) {}
+              if (c) {
+                scheduleState = 'awaiting_confirm'
+                scheduleData.client_id = c.id
+                scheduleData.attempts = 0
+                saveScheduleState()
+                sendAutoReply(
+                  'Encontrei o cadastro: ' +
+                    describeClient(c) +
+                    '. É você? Responda 1 para SIM ou 2 para NÃO.',
+                )
+                return
+              }
+            }
+            if (bumpAttempts()) {
+              clearScheduleState()
+              sendAutoReply(GIVE_UP_TEXT)
+              return
+            }
+            sendAutoReply('Responda com o número de uma das opções da lista acima.')
+            return
+          }
+
+          if (scheduleState === 'awaiting_confirm') {
+            if (trimmed === '1') {
+              let c = null
+              if (scheduleData.client_id) {
+                try {
+                  c = app.findRecordById('clients', scheduleData.client_id)
+                } catch (_) {}
+              }
+              if (!c) {
+                // Cadastro confirmado como novo cliente: cria agora.
+                try {
+                  c = new Record(app.findCollectionByNameOrId('clients'))
+                  c.set('name', String(scheduleData.name || '').trim() || 'Cliente WhatsApp')
+                  c.set('phone', String(scheduleData.phone || rawPhone).trim())
+                  c.set('status', 'active')
+                  app.save(c)
+                  console.log('[whatsapp] agendamento: novo cliente criado:', c.id)
+                } catch (err) {
+                  console.log('[whatsapp] agendamento: falha ao criar cliente:', err)
+                }
+              }
+              if (!c) {
+                clearScheduleState()
+                sendAutoReply(
+                  'Não consegui preparar o agendamento agora. Por favor, tente novamente mais tarde ou digite 1 para falar com um atendente.',
+                )
+                return
+              }
+              scheduleState = 'awaiting_slot'
+              scheduleData.attempts = 0
+              saveScheduleState()
+              sendSlotList()
+              return
+            }
+            if (trimmed === '2') {
+              scheduleState = 'awaiting_name'
+              scheduleData.client_id = ''
+              scheduleData.attempts = 0
+              saveScheduleState()
+              sendAutoReply('Sem problemas. ' + ASK_NAME)
+              return
+            }
+            if (bumpAttempts()) {
+              clearScheduleState()
+              sendAutoReply(GIVE_UP_TEXT)
+              return
+            }
+            sendAutoReply('Por favor, responda 1 para SIM ou 2 para NÃO.')
+            return
+          }
+
+          if (scheduleState === 'awaiting_slot') {
+            const slots = Array.isArray(scheduleData.slots) ? scheduleData.slots : []
+            const idx = parseInt(trimmed, 10)
+            if (!(idx >= 1 && idx <= slots.length)) {
+              if (bumpAttempts()) {
+                clearScheduleState()
+                sendAutoReply(GIVE_UP_TEXT)
+                return
+              }
+              sendAutoReply('Escolha o número de uma das opções da lista acima.')
+              return
+            }
+            const chosen = slots[idx - 1]
+            // Revalida na hora: o slot pode ter sido ocupado/reservado enquanto
+            // o cliente escolhia.
+            const blockers = loadScheduleBlockers()
+            const stillFree =
+              !blockers.holidaySet[chosen.date] &&
+              !blockers.reservedFull[chosen.date] &&
+              !(blockers.busy[chosen.date] || {})[chosen.time] &&
+              !(blockers.reservedTimes[chosen.date] || {})[chosen.time]
+            if (!stillFree) {
+              sendAutoReply('Esse horário acabou de ser preenchido, veja as opções:')
+              sendSlotList()
+              return
+            }
+            let clientRec = null
+            if (scheduleData.client_id) {
+              try {
+                clientRec = app.findRecordById('clients', scheduleData.client_id)
+              } catch (_) {}
+            }
+            if (!clientRec) {
+              try {
+                const matches = findClientsByPhone(scheduleData.phone || rawPhone)
+                if (matches.length > 0) clientRec = matches[0]
+              } catch (_) {}
+            }
+            if (!clientRec) {
+              clearScheduleState()
+              sendAutoReply(
+                'Não consegui concluir o agendamento agora. Por favor, tente novamente mais tarde ou digite 1 para falar com um atendente.',
+              )
+              return
+            }
+            try {
+              createScheduledOrder(clientRec, chosen)
+              sendAutoReply(
+                'Agendado! ' +
+                  slotKeyLabel(chosen.date, chosen.time) +
+                  '. Um técnico dará retorno. Obrigado!',
+              )
+              clearScheduleState()
+            } catch (orderErr) {
+              console.log('[whatsapp] agendamento: falha ao criar a OS:', orderErr)
+              clearScheduleState()
+              sendAutoReply(
+                'Tive um problema para registrar seu agendamento. Por favor, tente novamente em alguns minutos ou digite 1 para falar com um atendente.',
+              )
+            }
+            return
+          }
+
+          // Estado desconhecido: limpa para não travar a conversa.
+          clearScheduleState()
+        }
+
         if (!autoReplyAllowed) {
           // Modo validação: remetente fora da lista de teste — nada sai.
           // A mensagem já foi gravada; fica para atendimento manual.
+        } else if (scheduleState) {
+          // Cliente no meio do fluxo de agendamento: qualquer mensagem é
+          // processada pelo fluxo (inclusive "1"/"2" como resposta de
+          // confirmação, que não podem reabrir o menu).
+          try {
+            handleScheduleFlow()
+            sentOk = true
+          } catch (flowErr) {
+            sendError = String(flowErr)
+            console.log('[whatsapp] erro no fluxo de agendamento:', flowErr)
+          }
         } else if (isGreeting) {
           // Cumprimento do cliente (em conversa nova ou já com menu
           // apresentado): reabre o atendimento com saudação + menu.
@@ -743,16 +1227,16 @@ routerAdd(
               sendErr,
             )
           }
+        } else if (option === '2' || option === '3') {
+          // Opção 2 = orçamento, opção 3 = visita técnica: abre o fluxo
+          // conversacional de agendamento (nome/telefone -> cadastro -> slots).
+          scheduleIntro(option === '2' ? 'orcamento' : 'visita_tecnica')
+          sentOk = true
         } else {
           // Menu já apresentado (ou o cliente já digitou uma opção): responde
           // conforme a opção, sem reenviar saudação + menu.
           const replies = {
             1: 'Obrigado{{nome}}! Um atendente já foi acionado e vai te responder em instantes. Pode descrever sua necessidade aqui mesmo.',
-            2: 'Perfeito{{nome}}! Para preparar seu orçamento, me diga: qual serviço você precisa, o endereço e o melhor horário para visita?',
-            3: readTemplate(
-              'horarios',
-              'Horários de atendimento: Segunda a Sexta, 7h às 18h. Sábado, 8h às 12h. Emergências 24h pelo telefone (66) 9973-3422.',
-            ),
             4: 'Sem problemas{{nome}}! Escreva sua mensagem que nossa equipe responde assim que possível.',
           }
           const replyText = option ? applyPlaceholders(replies[option]) : ''
