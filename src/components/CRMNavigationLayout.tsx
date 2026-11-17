@@ -22,6 +22,7 @@ import {
   Wallet,
   MessageCircle,
   ClipboardList,
+  CalendarDays,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
@@ -47,7 +48,8 @@ export default function CRMNavigationLayout() {
     { title: 'Notas Fiscais', path: '/notas-fiscais', icon: Receipt },
     { title: 'Atendimentos', path: '/atendimentos', icon: MessageCircle },
     { title: 'Ordens de Serviço', path: '/ordens-servico', icon: ClipboardList },
-    { title: 'Agenda & Tarefas', path: '/agenda', icon: CalendarCheck },
+    { title: 'Agenda', path: '/agenda', icon: CalendarDays },
+    { title: 'Agenda & Tarefas', path: '/agenda/tarefas', icon: CalendarCheck },
     { title: 'Financeiro', path: '/financeiro', icon: ReceiptText },
     { title: 'Caixa', path: '/financeiro?aba=caixa', icon: Wallet },
     { title: 'Custos Fixos', path: '/financeiro?aba=custos-fixos', icon: DollarSign },

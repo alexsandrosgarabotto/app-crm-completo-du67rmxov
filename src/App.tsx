@@ -22,6 +22,7 @@ import ServicesPage from './pages/Services'
 import FiscalDocumentsPage from './pages/FiscalDocuments'
 import WhatsAppPage from './pages/WhatsApp'
 import ServiceOrdersPage from './pages/ServiceOrders'
+import AgendaPage from './pages/Agenda'
 import ReportsPage from './pages/Reports'
 import NotFound from './pages/NotFound'
 
@@ -56,7 +57,8 @@ const App = () => (
             <Route path="/notas-fiscais" element={<FiscalDocumentsPage />} />
             <Route path="/atendimentos" element={<WhatsAppPage />} />
             <Route path="/ordens-servico" element={<ServiceOrdersPage />} />
-            <Route path="/agenda" element={<ScheduleTasksPage />} />
+            <Route path="/agenda" element={<AgendaPage />} />
+            <Route path="/agenda/tarefas" element={<ScheduleTasksPage />} />
             <Route path="/financeiro" element={<FinancialPage />} />
             <Route path="/relatorios" element={<ReportsPage />} />
             <Route
