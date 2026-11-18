@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-18T00:17:43.455Z",
+  "generatedAt": "2026-11-18T00:34:56.642Z",
   "collections": [
     {
       "name": "users",
@@ -1599,6 +1599,18 @@
         },
         {
           "name": "order_type",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "scheduled_date",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "scheduled_time",
           "type": "text",
           "required": false,
           "system": false

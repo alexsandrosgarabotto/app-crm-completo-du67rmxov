@@ -298,7 +298,10 @@ routerAdd(
           if (!candidate || seen[candidate]) continue
           seen[candidate] = true
           try {
-            const found = app.findRecordsByFilter('clients', 'phone = {:phone}', '-created', 1, 0, {
+            // 'created' ascendente: se houver cadastros duplicados com o mesmo
+            // telefone, o ORIGINAL vence — o duplicado criado pelo fluxo não
+            // deve "roubar" a conversa (e o estado do agendamento) do cliente.
+            const found = app.findRecordsByFilter('clients', 'phone = {:phone}', 'created', 1, 0, {
               phone: candidate,
             })
             if (found.length > 0) {
@@ -309,7 +312,7 @@ routerAdd(
         }
         if (!clientRecord && target) {
           try {
-            const all = app.findRecordsByFilter('clients', "phone != ''", '-created', 500, 0)
+            const all = app.findRecordsByFilter('clients', "phone != ''", 'created', 500, 0)
             for (const record of all) {
               if (samePhone(normalizePhone(record.get('phone')), target)) {
                 clientRecord = record
@@ -399,6 +402,29 @@ routerAdd(
             }
           } catch (_) {}
         }
+        if (!conversation && normalized) {
+          // Último recurso: conversa já existente pelo TELEFONE, mesmo que o
+          // cliente resolvido deste inbound seja outro registro (duplicado).
+          // Reaproveita a conversa — e o estado do fluxo de agendamento — em
+          // vez de abrir uma conversa nova sem estado.
+          try {
+            const byPhone = app.findRecordsByFilter(
+              'whatsapp_conversations',
+              'phone = {:phone}',
+              '-created',
+              1,
+              0,
+              { phone: rawPhone },
+            )
+            if (byPhone.length > 0) {
+              conversation = byPhone[0]
+              if (String(conversation.get('client_id') || '') !== clientRecord.id) {
+                conversation.set('client_id', clientRecord.id)
+              }
+              app.save(conversation)
+            }
+          } catch (_) {}
+        }
         if (conversation && conversation.get('status') === 'finalizado') {
           conversation.set('status', 'aberto')
           app.save(conversation)
@@ -466,13 +492,27 @@ routerAdd(
         // cadastros) OU endereço informado (não localizado) -> slots nos DOIS
         // turnos (manhã 08:00-11:00, tarde 13:30-17:30, 1h de intervalo).
         // Estado na conversa: schedule_state ('awaiting_name' |
-        // 'awaiting_confirm' | 'awaiting_pick' | 'awaiting_slot' | 'vt_name' |
-        // 'vt_phone' | 'vt_confirm' | 'vt_pick' | 'vt_address') +
-        // schedule_data (json) — migração 0023.
-        const SCHEDULE_SLOTS = ['08:00', '09:00', '10:00']
-        // Visita técnica: dois turnos — manhã das 08:00 às 11:00 e tarde das
-        // 13:30 às 17:30, com 1h de intervalo entre atendimentos.
-        const VISITA_SLOTS = ['08:00', '09:00', '10:00', '13:30', '14:30', '15:30', '16:30']
+        // 'awaiting_confirm' | 'awaiting_pick' | 'awaiting_slot' |
+        // 'awaiting_description' | 'vt_name' | 'vt_phone' | 'vt_confirm' |
+        // 'vt_pick' | 'vt_address') + schedule_data (json) — migração 0023.
+        // Depois do slot escolhido, o bot pede a DESCRIÇÃO do serviço em
+        // texto livre ('awaiting_description') e só então abre a OS,
+        // confirmando ao cliente o NÚMERO da OS e a data com horário.
+        // Manhã das 08:00 às 11:00 (inclui 11:00) e tarde das 13:30 às 17:30,
+        // com 1h de intervalo entre atendimentos — idêntico para orçamento e
+        // visita técnica (pedido do dono: "faltaram as opções do período da
+        // tarde e nem das 11:00").
+        const SCHEDULE_SLOTS = [
+          '08:00',
+          '09:00',
+          '10:00',
+          '11:00',
+          '13:30',
+          '14:30',
+          '15:30',
+          '16:30',
+        ]
+        const VISITA_SLOTS = SCHEDULE_SLOTS
         const SCHEDULE_MAX_SLOTS = 10
         const WEEKDAY_NAMES = [
           'Domingo',
@@ -488,18 +528,42 @@ routerAdd(
         let scheduleState = String(conversation.get('schedule_state') || '')
         let scheduleData = {}
         const rawSchedData = conversation.get('schedule_data')
-        if (rawSchedData && typeof rawSchedData === 'object' && !Array.isArray(rawSchedData)) {
-          scheduleData = rawSchedData
-        } else if (typeof rawSchedData === 'string' && rawSchedData.trim() !== '') {
-          try {
-            scheduleData = JSON.parse(rawSchedData) || {}
-          } catch (_) {
-            scheduleData = {}
+        // O JSVM (goja) devolve o JSONField como objeto JS NÃO re-serializável:
+        // usá-lo direto e gravá-lo de volta gera "undefined" persistido e os
+        // dados do fluxo (nome, telefone, slots) se perdem entre mensagens —
+        // visto em produção ("busca por undefined"). Reconstruímos SEMPRE um
+        // objeto plano a partir da string JSON.
+        try {
+          const asString =
+            typeof rawSchedData === 'string'
+              ? rawSchedData
+              : rawSchedData && typeof rawSchedData === 'object'
+                ? JSON.stringify(rawSchedData)
+                : ''
+          if (asString && asString.trim() !== '' && asString !== 'undefined') {
+            const parsed = JSON.parse(asString)
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+              scheduleData = parsed
+            }
+          }
+        } catch (_) {
+          scheduleData = {}
+        }
+        // Sanitiza valores "undefined"/"null" que gravações antigas corrompidas
+        // do JSONField possam ter persistido (visto em produção: nome "undefined").
+        for (const k of ['name', 'phone', 'order_type', 'address', 'client_id']) {
+          const v = scheduleData[k]
+          if (v === undefined || v === null || String(v) === 'undefined' || String(v) === 'null') {
+            scheduleData[k] = ''
           }
         }
         const saveScheduleState = () => {
+          // Stringify a partir do objeto plano reconstruído acima (nunca do
+          // objeto cru do JSVM) e guarda numa variável: passar a expressão
+          // direta ao set() fez o JSVM gravar "undefined" no JSONField.
+          const serialized = JSON.stringify(scheduleData) || '{}'
           conversation.set('schedule_state', scheduleState)
-          conversation.set('schedule_data', JSON.stringify(scheduleData))
+          conversation.set('schedule_data', serialized)
           app.save(conversation)
         }
         const clearScheduleState = () => {
@@ -958,7 +1022,7 @@ routerAdd(
           return ''
         }
 
-        const createScheduledOrder = (clientRec, slot) => {
+        const createScheduledOrder = (clientRec, slot, description) => {
           const orderNumber = nextOrderNumber()
           const orderRecord = new Record(app.findCollectionByNameOrId('service_orders'))
           orderRecord.set('number', orderNumber)
@@ -967,14 +1031,32 @@ routerAdd(
           orderRecord.set('status', 'aberta')
           orderRecord.set('opened_at', new Date().toISOString())
           orderRecord.set('order_type', String(scheduleData.order_type || 'orcamento'))
+          // Descrição ditada pelo cliente no fluxo; sem ela, o rótulo padrão
+          // por tipo de agendamento.
+          const desc = String(description || '').trim()
           orderRecord.set(
             'problem_description',
-            String(scheduleData.order_type) === 'visita_tecnica'
-              ? 'Visita técnica agendada via WhatsApp'
-              : 'Orçamento agendado via WhatsApp',
+            desc ||
+              (String(scheduleData.order_type) === 'visita_tecnica'
+                ? 'Visita técnica agendada via WhatsApp'
+                : 'Orçamento agendado via WhatsApp'),
           )
           orderRecord.set('scheduled_date', slot.date)
           orderRecord.set('scheduled_time', slot.time)
+          // agendamento_para (date) — é o campo que o calendário da Agenda usa
+          // para posicionar a OS no dia/hora.
+          const dateParts = String(slot.date || '').split('-')
+          const timeParts = String(slot.time || '').split(':')
+          if (dateParts.length === 3 && timeParts.length >= 2) {
+            const when = new Date(
+              parseInt(dateParts[0], 10),
+              parseInt(dateParts[1], 10) - 1,
+              parseInt(dateParts[2], 10),
+              parseInt(timeParts[0], 10),
+              parseInt(timeParts[1], 10),
+            )
+            orderRecord.set('agendamento_para', when.toISOString())
+          }
           orderRecord.set('stock_released', false)
           // Técnico principal: o primeiro técnico ativo cadastrado.
           try {
@@ -1141,6 +1223,15 @@ routerAdd(
                 } catch (_) {}
               }
               if (!c) {
+                // Cadastro confirmado como novo cliente: se o telefone já tem
+                // cadastro (ex.: criado automaticamente no primeiro inbound),
+                // REUSA em vez de duplicar.
+                try {
+                  const existing = findClientsByPhone(scheduleData.phone || rawPhone)
+                  if (existing.length > 0) c = existing[0]
+                } catch (_) {}
+              }
+              if (!c) {
                 // Cadastro confirmado como novo cliente: cria agora.
                 try {
                   c = new Record(app.findCollectionByNameOrId('clients'))
@@ -1185,6 +1276,12 @@ routerAdd(
 
           if (scheduleState === 'awaiting_slot') {
             const slots = Array.isArray(scheduleData.slots) ? scheduleData.slots : []
+            if (slots.length === 0) {
+              // Estado sem a lista (dados perdidos): reoferta os horários
+              // em vez de travar o cliente num "responda com o número".
+              sendSlotList()
+              return
+            }
             const idx = parseInt(trimmed, 10)
             if (!(idx >= 1 && idx <= slots.length)) {
               if (bumpAttempts()) {
@@ -1209,6 +1306,37 @@ routerAdd(
               sendSlotList()
               return
             }
+            // Escolha válida: guarda o slot e pede a DESCRICÃO do serviço
+            // (pedido do dono) — a OS só é criada quando a descrição chegar.
+            scheduleState = 'awaiting_description'
+            scheduleData.chosen_date = chosen.date
+            scheduleData.chosen_time = chosen.time
+            scheduleData.slots = []
+            scheduleData.attempts = 0
+            saveScheduleState()
+            sendAutoReply(
+              'Horário reservado: ' +
+                slotKeyLabel(chosen.date, chosen.time) +
+                '.\nAgora, descreva em uma mensagem o serviço que você precisa (o que aconteceu, o que precisa ser feito):',
+            )
+            return
+          }
+
+          if (scheduleState === 'awaiting_description') {
+            // Descrição do serviço em texto livre: abre a OS com ela gravada e
+            // confirma ao cliente o NÚMERO da OS e a data com horário.
+            const desc = trimmed.replace(/\s+/g, ' ').trim()
+            if (desc.length < 3) {
+              if (bumpAttempts()) {
+                clearScheduleState()
+                sendAutoReply(GIVE_UP_TEXT)
+                return
+              }
+              sendAutoReply(
+                'Não entendi. Descreva o serviço em uma mensagem (ex.: "instalação de cerca elétrica na garagem"):',
+              )
+              return
+            }
             let clientRec = null
             if (scheduleData.client_id) {
               try {
@@ -1229,11 +1357,23 @@ routerAdd(
               return
             }
             try {
-              createScheduledOrder(clientRec, chosen)
+              const order = createScheduledOrder(
+                clientRec,
+                {
+                  date: scheduleData.chosen_date,
+                  time: scheduleData.chosen_time,
+                },
+                desc,
+              )
               sendAutoReply(
-                'Agendado! ' +
-                  slotKeyLabel(chosen.date, chosen.time) +
-                  '. Um técnico dará retorno. Obrigado!',
+                'Pronto! Sua ordem de serviço ' +
+                  String(order.get('number') || '') +
+                  ' foi aberta para ' +
+                  slotKeyLabel(
+                    String(scheduleData.chosen_date || ''),
+                    String(scheduleData.chosen_time || ''),
+                  ) +
+                  '. Em breve nossa equipe entrará em contato. Obrigado!',
               )
               clearScheduleState()
             } catch (orderErr) {
@@ -1395,6 +1535,14 @@ routerAdd(
               if (scheduleData.client_id) {
                 try {
                   c = app.findRecordById('clients', scheduleData.client_id)
+                } catch (_) {}
+              }
+              if (!c) {
+                // Telefone já tem cadastro (mesmo que por outro nome)? Reusa —
+                // evita duplicar o cliente a cada fluxo.
+                try {
+                  const existing = findClientsByPhone(scheduleData.phone || rawPhone)
+                  if (existing.length > 0) c = existing[0]
                 } catch (_) {}
               }
               if (!c) {
