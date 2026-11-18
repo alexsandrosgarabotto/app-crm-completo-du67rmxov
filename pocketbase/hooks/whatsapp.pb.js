@@ -227,6 +227,12 @@ routerAdd(
     // { object, entry: [ { changes: [ { value: { contacts, messages, statuses } } ] } ] }
     // Formato simples (retrocompatível): { phone/from, body/text, external_id }
     let events = []
+    // Marcador para mensagens de mídia SEM texto (áudio, imagem, sticker,
+    // documento): antes eram descartadas e a rota respondia 400 sem gravar
+    // nem responder nada — silêncio total para o cliente. Agora viram um
+    // evento com este marcador, são gravadas na conversa e recebem orientação
+    // para reenviar em texto.
+    const MEDIA_NO_TEXT = '[mídia sem texto]'
     if (Array.isArray(body.entry)) {
       for (const entry of body.entry || []) {
         for (const change of (entry && entry.changes) || []) {
@@ -245,7 +251,17 @@ routerAdd(
                     (msg.interactive.list_reply && msg.interactive.list_reply.title))) ||
                 '',
             )
-            if (!text) continue // mídia sem legenda etc.: sem texto para registrar
+            if (!text) {
+              // Mídia sem texto: registra com o marcador em vez de descartar.
+              if (!String(msg.from || '')) continue
+              events.push({
+                phone: String(msg.from || ''),
+                text: MEDIA_NO_TEXT,
+                externalId: String(msg.id || ''),
+                contactName: contactName,
+              })
+              continue
+            }
             events.push({
               phone: String(msg.from || ''),
               text: text,
@@ -271,7 +287,10 @@ routerAdd(
     }
 
     if (events.length === 0) {
-      throw new BadRequestError('Payload sem mensagens para processar')
+      // Sem mensagens nem callbacks de status (ex.: webhook de teste da Meta,
+      // mídia ininteligível): responde 200 — um 4xx fazia a Meta reentregar
+      // em loop e nada era registrado.
+      return e.json(200, { ok: true, ignored: 'nenhuma mensagem no payload' })
     }
 
     const results = []
@@ -492,9 +511,12 @@ routerAdd(
         // cadastros) OU endereço informado (não localizado) -> slots nos DOIS
         // turnos (manhã 08:00-11:00, tarde 13:30-17:30, 1h de intervalo).
         // Estado na conversa: schedule_state ('awaiting_name' |
-        // 'awaiting_confirm' | 'awaiting_pick' | 'awaiting_slot' |
+        // 'awaiting_confirm' | 'awaiting_pick' | 'awaiting_known_confirm' |
+        // 'awaiting_address' | 'awaiting_address_confirm' | 'awaiting_slot' |
         // 'awaiting_description' | 'vt_name' | 'vt_phone' | 'vt_confirm' |
         // 'vt_pick' | 'vt_address') + schedule_data (json) — migração 0023.
+        // A OS SÓ é aberta depois do ENDEREÇO do atendimento confirmado pelo
+        // cliente (pedido do dono: o endereço é o dado mais importante).
         // Depois do slot escolhido, o bot pede a DESCRIÇÃO do serviço em
         // texto livre ('awaiting_description') e só então abre a OS,
         // confirmando ao cliente o NÚMERO da OS e a data com horário.
@@ -1012,7 +1034,7 @@ routerAdd(
           const cadName = String(clientRecord.get('name') || '').trim()
           const knownClient = !isAutoClientName(cadName) && findClientsByPhone(rawPhone).length > 0
           if (knownClient) {
-            scheduleState = 'awaiting_slot'
+            scheduleState = 'awaiting_known_confirm'
             scheduleData = {
               order_type: tipo,
               name: cadName,
@@ -1026,7 +1048,7 @@ routerAdd(
                 (tipo === 'visita_tecnica' ? 'opção 3' : 'opção 2') +
                 '): cliente JÁ CADASTRADO reconhecido pelo telefone — client_id=' +
                 clientRecord.id +
-                ', pulando para escolha de horário',
+                ', confirmando identidade e ENDEREÇO antes dos horários',
             )
             sendAutoReply(
               'Olá' +
@@ -1034,7 +1056,7 @@ routerAdd(
                 '! Encontrei seu cadastro aqui. É você mesmo?' +
                 '\n\n' +
                 describeClient(clientRecord) +
-                '\n\nResponda 1 para SIM e já escolhemos a data e o horário, ou 2 para NÃO (aí eu confiro seus dados com você).',
+                '\n\nResponda 1 para SIM (aí confirmamos o ENDEREÇO do atendimento) ou 2 para NÃO (aí eu confiro seus dados com você).',
             )
             return
           }
@@ -1094,6 +1116,36 @@ routerAdd(
           if (parts && cityState) return parts + ' — ' + cityState
           if (parts || cityState) return parts || cityState
           return ''
+        }
+
+        // Passo de ENDEREÇO — obrigatório antes de ofertar horários. Mostra o
+        // endereço que será usado na OS (o digitado no fluxo tem prioridade;
+        // sem ele, o do cadastro) e pede confirmação. Cadastro sem endereço
+        // nenhum pede para digitar. Só depois de confirmado vêm os horários.
+        const startAddressStep = (clientRec) => {
+          const typed = String(scheduleData.address || '').trim()
+          const addr = typed || (clientRec ? clientFullAddress(clientRec) : '')
+          if (clientRec) scheduleData.client_id = clientRec.id
+          scheduleData.attempts = 0
+          if (!addr) {
+            scheduleState = 'awaiting_address'
+            saveScheduleState()
+            console.log('[whatsapp] agendamento: cadastro sem endereço — pedindo o endereço')
+            sendAutoReply(
+              'Agora me confirme o ENDEREÇO do atendimento (rua, número, bairro e cidade):',
+            )
+            return
+          }
+          scheduleState = 'awaiting_address_confirm'
+          saveScheduleState()
+          console.log(
+            '[whatsapp] agendamento: confirmando o endereço (' + addr + ') antes dos horários',
+          )
+          sendAutoReply(
+            'O atendimento será no endereço: ' +
+              addr +
+              '\n\nEstá correto? Responda 1 para SIM ou 2 para informar outro endereço.',
+          )
         }
 
         const createScheduledOrder = (clientRec, slot, description) => {
@@ -1183,15 +1235,20 @@ routerAdd(
           if (scheduleState === 'awaiting_known_confirm') {
             // Confirmação do cliente reconhecido pelo telefone do cadastro.
             if (trimmed === '1') {
-              scheduleState = 'awaiting_slot'
+              let c = null
+              if (scheduleData.client_id) {
+                try {
+                  c = app.findRecordById('clients', scheduleData.client_id)
+                } catch (_) {}
+              }
+              if (!c) c = clientRecord
               scheduleData.attempts = 0
-              saveScheduleState()
               console.log(
                 '[whatsapp] cliente confirmou o cadastro (' +
                   (scheduleData.order_type === 'visita_tecnica' ? 'opção 3' : 'opção 2') +
-                  ') — indo direto para os horários',
+                  ') — confirmando o ENDEREÇO antes dos horários',
               )
-              sendSlotList()
+              startAddressStep(c)
               return
             }
             if (trimmed === '2') {
@@ -1359,10 +1416,11 @@ routerAdd(
                 )
                 return
               }
-              scheduleState = 'awaiting_slot'
+              console.log(
+                '[whatsapp] agendamento: cadastro confirmado — confirmando o ENDEREÇO antes dos horários',
+              )
               scheduleData.attempts = 0
-              saveScheduleState()
-              sendSlotList()
+              startAddressStep(c)
               return
             }
             if (trimmed === '2') {
@@ -1379,6 +1437,62 @@ routerAdd(
               return
             }
             sendAutoReply('Por favor, responda 1 para SIM ou 2 para NÃO.')
+            return
+          }
+
+          if (scheduleState === 'awaiting_address_confirm') {
+            // Endereço do atendimento (do cadastro ou digitado) confirmado:
+            // só agora a lista de horários é oferecida e a OS poderá ser aberta.
+            if (trimmed === '1') {
+              scheduleState = 'awaiting_slot'
+              scheduleData.attempts = 0
+              saveScheduleState()
+              console.log('[whatsapp] endereço confirmado pelo cliente — ofertando horários')
+              sendSlotList()
+              return
+            }
+            if (trimmed === '2') {
+              scheduleState = 'awaiting_address'
+              scheduleData.address = ''
+              scheduleData.attempts = 0
+              saveScheduleState()
+              sendAutoReply(
+                'Sem problemas. Me informe o ENDEREÇO correto do atendimento (rua, número, bairro e cidade):',
+              )
+              return
+            }
+            if (bumpAttempts()) {
+              clearScheduleState()
+              sendAutoReply(GIVE_UP_TEXT)
+              return
+            }
+            sendAutoReply('Por favor, responda 1 para SIM ou 2 para informar outro endereço.')
+            return
+          }
+
+          if (scheduleState === 'awaiting_address') {
+            // Endereço digitado em texto livre; volta para a confirmação.
+            const addr = trimmed.replace(/\s+/g, ' ').trim()
+            if (addr.length < 5) {
+              if (bumpAttempts()) {
+                clearScheduleState()
+                sendAutoReply(GIVE_UP_TEXT)
+                return
+              }
+              sendAutoReply(
+                'Não entendi. Por favor, informe o endereço completo do atendimento (rua, número, bairro e cidade):',
+              )
+              return
+            }
+            scheduleData.address = addr
+            scheduleState = 'awaiting_address_confirm'
+            scheduleData.attempts = 0
+            saveScheduleState()
+            sendAutoReply(
+              'Confirme o endereço do atendimento: ' +
+                addr +
+                '\n\nEstá correto? Responda 1 para SIM ou 2 para NÃO.',
+            )
             return
           }
 
@@ -1680,10 +1794,11 @@ routerAdd(
                 )
                 return
               }
-              scheduleState = 'awaiting_slot'
+              console.log(
+                '[whatsapp] visita técnica: cadastro confirmado — confirmando o ENDEREÇO antes dos horários',
+              )
               scheduleData.attempts = 0
-              saveScheduleState()
-              sendSlotList()
+              startAddressStep(c)
               return
             }
             if (trimmed === '2') {
@@ -1737,13 +1852,38 @@ routerAdd(
             return
           }
 
-          // Estado desconhecido: limpa para não travar a conversa.
+          // Estado desconhecido ou pela metade (ex.: gravado por uma versão
+          // anterior do fluxo): limpa e recomeça do menu — o cliente NUNCA
+          // fica sem resposta por causa de um estado inválido.
+          const staleState = scheduleState
           clearScheduleState()
+          try {
+            sendGreetingAndMenu()
+            console.log(
+              '[whatsapp] estado de agendamento inválido ("' +
+                staleState +
+                '") — fluxo limpo e menu reenviado',
+            )
+          } catch (menuErr) {
+            console.log('[whatsapp] falha ao reenviar o menu após estado inválido:', menuErr)
+          }
         }
 
         if (!autoReplyAllowed) {
           // Modo validação: remetente fora da lista de teste — nada sai.
           // A mensagem já foi gravada; fica para atendimento manual.
+        } else if (text === MEDIA_NO_TEXT) {
+          // Áudio/imagem/sticker sem texto: orienta o reenvio em texto SEM
+          // alterar o estado do fluxo (antes: nada era gravado nem respondido).
+          try {
+            sendAutoReply(
+              'Recebi um áudio/mídia, mas não consigo processar esse formato por aqui. Por favor, escreva sua mensagem em texto.',
+            )
+            sentOk = true
+          } catch (sendErr) {
+            sendError = String(sendErr)
+            console.log('[whatsapp] aviso: orientação de mídia sem texto não enviada:', sendErr)
+          }
         } else if (scheduleState && isGreeting) {
           // Cumprimento no meio do fluxo: Reinicia o atendimento do zero —
           // limpa o estado (inclusive listas de horários antigas gravadas
@@ -1770,6 +1910,16 @@ routerAdd(
           } catch (flowErr) {
             sendError = String(flowErr)
             console.log('[whatsapp] erro no fluxo de agendamento:', flowErr)
+            // Recuperação: limpa o estado e responde — o cliente nunca fica
+            // em silêncio total após um erro no meio do fluxo.
+            try {
+              clearScheduleState()
+              sendAutoReply(
+                'Tive um problema técnico no meio do nosso atendimento e perdi o fio da conversa. Responda com o número da opção desejada:\n1 - Falar com um atendente\n2 - Solicitar um orçamento\n3 - Abrir uma visita técnica\n4 - Outros assuntos',
+              )
+            } catch (recoverErr) {
+              console.log('[whatsapp] falha também na recuperação do fluxo:', recoverErr)
+            }
           }
         } else if (isGreeting) {
           // Cumprimento do cliente (em conversa nova ou já com menu
