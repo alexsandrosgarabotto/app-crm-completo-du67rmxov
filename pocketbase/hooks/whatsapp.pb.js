@@ -302,6 +302,32 @@ routerAdd(
                 )
                 continue
               }
+              // Mídia REAL vs. FANTASMA: todo tipo de mídia chega com um objeto
+              // dedicado no payload (msg.audio, msg.image, msg.video,
+              // msg.document...) — a Meta nunca entrega um type sem ele. O
+              // objeto traz sempre o media id (msg.<type>.id, sha256/ mime_type
+              // preenchidos): é nele que se baixa o arquivo. Evento de mídia
+              // INVISÍVEL no chat (apagada, view-once já aberta, edição
+              // cancelada, reentrega sem anexo) chega com o type mas SEM o
+              // campo/objeto correspondente nem media id — é exatamente o
+              // "aviso fantasma" (bug 18/11 13:21: type=document sem
+              // msg.document, minutos antes de um áudio real). Sem anexo não há
+              // nada a processar: IGNORA por completo — nenhuma gravação,
+              // nenhuma resposta.
+              const mediaObj = msg[msgType] || null
+              const mediaId = String((mediaObj && mediaObj.id) || '')
+              if (!mediaObj || !mediaId) {
+                console.log(
+                  '[whatsapp] evento de mídia FANTASMA ignorado (tipo=' +
+                    msgType +
+                    ' sem objeto de mídia/media id no payload) de ' +
+                    String((msg && msg.from) || '') +
+                    ' wamid=' +
+                    String((msg && msg.id) || '') +
+                    ' — nenhuma gravação, nenhuma resposta',
+                )
+                continue
+              }
               // Log do tipo exato: é o que permite diagnosticar nos logs QUE
               // evento da Meta disparou a orientação (bug 18/11: avisos
               // "aleatórios" eram eventos de mídia invisíveis no chat).
@@ -310,13 +336,14 @@ routerAdd(
                   msgType +
                   ') de ' +
                   String((msg && msg.from) || '') +
-                  ' — gravando; orientação sujeita ao circuit-breaker',
+                  ' — gravando; orientação sujeita ao circuit-breaker por tipo',
               )
               events.push({
                 phone: String(msg.from || ''),
                 text: MEDIA_NO_TEXT,
                 externalId: String(msg.id || ''),
                 contactName: contactName,
+                msgType: msgType,
               })
               continue
             }
@@ -360,6 +387,7 @@ routerAdd(
         const text = String(ev.text || '')
         const externalId = String(ev.externalId || '')
         const contactName = String(ev.contactName || '')
+        const evMsgType = String(ev.msgType || '')
 
         if (!rawPhone || !text) {
           results.push({ ok: false, error: 'mensagem sem remetente ou texto' })
@@ -555,6 +583,12 @@ routerAdd(
         inboundRecord.set('body', text)
         if (externalId) {
           inboundRecord.set('external_id', externalId)
+        }
+        // Tipo de mídia do inbound (audio/document/...) — permite ao
+        // circuit-breaker do aviso de mídia saber QUAL tipo já foi orientado:
+        // um aviso de documento fantasma não pode silenciar um áudio real.
+        if (evMsgType) {
+          inboundRecord.set('msg_type', evMsgType)
         }
         try {
           app.save(inboundRecord)
@@ -982,7 +1016,10 @@ routerAdd(
         // checagem do modo de validação vive DENTRO — nenhum caminho futuro
         // consegue enviar para fora da lista de teste, mesmo que esqueça a
         // checagem no ramo dele.
-        const sendAutoReply = (body) => {
+        // O 2º parâmetro (msgType) só é usado pela orientação de mídia: marca o
+        // outbound com o tipo que o GEROU, para o circuit-breaker comparar —
+        // aviso de um tipo não silencia o aviso de outro tipo.
+        const sendAutoReply = (body, msgType) => {
           if (!autoReplyAllowed) {
             console.log(
               '[whatsapp] BLOQUEIO fail-safe: resposta automática não saiu (modo validação ativo, número fora da lista de teste): ' +
@@ -996,6 +1033,9 @@ routerAdd(
           outboundRecord.set('direction', 'outbound')
           outboundRecord.set('origin', 'auto')
           outboundRecord.set('body', body)
+          if (msgType) {
+            outboundRecord.set('msg_type', msgType)
+          }
           app.save(outboundRecord)
           conversation.set('last_message', body)
           conversation.set('last_message_at', new Date().toISOString())
@@ -2069,27 +2109,44 @@ routerAdd(
             const cutoffIso = new Date(Date.now() - MEDIA_FALLBACK_COOLDOWN_MIN * 60000)
               .toISOString()
               .replace('T', ' ')
-            const recentes = app.findRecordsByFilter(
+            // Circuito POR TIPO de mídia: grava o tipo no inbound
+            // (msg_type) e considera "orientação recente" apenas outbound
+            // com body igual que veio logo após um inbound do MESMO tipo —
+            // a orientação de um documento (ex.: evento fantasma 13:21) não
+            // silencia a orientação de um áudio real (13:22).
+            const recentOut = app.findRecordsByFilter(
               'whatsapp_messages',
               "conversation_id = {:cid} && direction = 'outbound' && body = {:body} && created > {:since}",
               '-created',
-              1,
+              5,
               0,
               { cid: conversation.id, body: MEDIA_FALLBACK_TEXT, since: cutoffIso },
             )
-            fallbackRecente = recentes.length > 0
+            for (const outMsg of recentOut) {
+              let outMsgType = ''
+              try {
+                outMsgType = String(outMsg.get('msg_type') || '')
+              } catch (_) {}
+              if (!outMsgType) continue
+              if (outMsgType === evMsgType) {
+                fallbackRecente = true
+                break
+              }
+            }
           } catch (rateErr) {
             console.log('[whatsapp] aviso: checagem do circuit-breaker de mídia falhou:', rateErr)
           }
           if (fallbackRecente) {
             console.log(
-              '[whatsapp] circuit-breaker: orientação de mídia já enviada nesta conversa nos últimos ' +
+              '[whatsapp] circuit-breaker: orientação para mídia tipo "' +
+                evMsgType +
+                '" já enviada nesta conversa nos últimos ' +
                 MEDIA_FALLBACK_COOLDOWN_MIN +
                 ' min — NADA reenviado ao cliente',
             )
           } else {
             try {
-              sendAutoReply(MEDIA_FALLBACK_TEXT)
+              sendAutoReply(MEDIA_FALLBACK_TEXT, evMsgType)
               sentOk = true
             } catch (sendErr) {
               sendError = String(sendErr)

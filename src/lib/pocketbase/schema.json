@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-18T16:52:45.325Z",
+  "generatedAt": "2026-11-18T17:38:04.237Z",
   "collections": [
     {
       "name": "users",
@@ -1429,11 +1429,18 @@
           "required": false,
           "system": false,
           "autodateTriggers": ["onCreate", "onUpdate"]
+        },
+        {
+          "name": "msg_type",
+          "type": "text",
+          "required": false,
+          "system": false
         }
       ],
       "indexes": [
         "CREATE INDEX idx_wa_msg_conversation ON whatsapp_messages (conversation_id)",
-        "CREATE UNIQUE INDEX idx_wa_msg_external_unique ON whatsapp_messages (external_id) WHERE external_id != ''"
+        "CREATE UNIQUE INDEX idx_wa_msg_external_unique ON whatsapp_messages (external_id) WHERE external_id != ''",
+        "CREATE INDEX idx_wa_msg_breaker ON whatsapp_messages (conversation_id, direction, msg_type, created)"
       ]
     },
     {
