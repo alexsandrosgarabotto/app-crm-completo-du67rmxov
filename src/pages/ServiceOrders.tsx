@@ -733,108 +733,205 @@ export default function ServiceOrdersPage() {
             </p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-slate-50">
-                  <TableHead>Número</TableHead>
-                  <TableHead>Cliente</TableHead>
-                  <TableHead>Abertura</TableHead>
-                  <TableHead>Itens</TableHead>
-                  <TableHead>Total</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Ações</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody className="divide-y divide-slate-100">
-                {filtered.map((order) => (
-                  <TableRow key={order.id} className="hover:bg-slate-50/70">
-                    <TableCell className="font-semibold text-slate-900">
-                      {order.number || '—'}
-                    </TableCell>
-                    <TableCell>
-                      <div className="font-medium text-slate-800">{getClientName(order)}</div>
+          <>
+            {/* MOBILE: cartões empilhados, sem rolagem horizontal */}
+            <ul className="md:hidden divide-y divide-slate-100">
+              {filtered.map((order) => (
+                <li key={order.id} className="p-4 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-slate-900 text-sm">{order.number || '—'}</p>
+                      <p className="font-medium text-slate-800 text-sm truncate">
+                        {getClientName(order)}
+                      </p>
                       {order.expand?.responsible_id && (
-                        <div className="text-xs text-slate-400">
+                        <p className="text-xs text-slate-400 truncate">
                           Resp.: {order.expand.responsible_id.name}
-                        </div>
+                        </p>
                       )}
-                    </TableCell>
-                    <TableCell className="text-xs text-slate-500">
+                    </div>
+                    <div className="flex flex-col items-end gap-1 shrink-0">
+                      <Badge className={cn('text-xs', statusBadgeClasses[order.status])}>
+                        {serviceOrderStatusLabels[order.status]}
+                      </Badge>
+                      <span className="text-sm font-semibold text-slate-900">
+                        {(order.total_value || 0).toLocaleString('pt-BR', {
+                          style: 'currency',
+                          currency: 'BRL',
+                        })}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
+                    <span className="flex items-center gap-1">
+                      <Calendar className="h-3 w-3" />
                       {(order.opened_at || order.created || '')
                         .slice(0, 10)
                         .split('-')
                         .reverse()
                         .join('/')}
-                    </TableCell>
-                    <TableCell className="text-xs text-slate-500">
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <Package className="h-3 w-3" />
                       {(order.items || []).length} item(ns)
-                    </TableCell>
-                    <TableCell className="font-medium text-slate-900">
-                      {(order.total_value || 0).toLocaleString('pt-BR', {
-                        style: 'currency',
-                        currency: 'BRL',
-                      })}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col gap-1 items-start">
-                        <Badge className={cn('text-xs', statusBadgeClasses[order.status])}>
-                          {serviceOrderStatusLabels[order.status]}
-                        </Badge>
-                        {order.invoice_id && (
-                          <span className="text-[10px] text-emerald-600 flex items-center gap-1">
-                            <CheckCircle2 className="h-3 w-3" /> Fatura gerada
-                          </span>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex items-center justify-end gap-1">
-                        {order.status !== 'finalizada' && order.status !== 'cancelada' && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-8 text-xs text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50"
-                            onClick={() => setFinalizeTarget(order)}
-                          >
-                            <CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Finalizar
-                          </Button>
-                        )}
-                        {order.status === 'finalizada' && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-8 text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50"
-                            onClick={() => setCancelTarget(order)}
-                          >
-                            <XCircle className="h-3.5 w-3.5 mr-1" /> Cancelar
-                          </Button>
-                        )}
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-slate-500 hover:text-blue-600"
-                          onClick={() => openEdit(order)}
-                          title="Editar"
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-rose-500 hover:text-rose-700 hover:bg-rose-50"
-                          onClick={() => handleDelete(order)}
-                          title="Excluir"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    </TableCell>
+                    </span>
+                    {order.invoice_id && (
+                      <span className="flex items-center gap-1 text-emerald-600">
+                        <CheckCircle2 className="h-3 w-3" /> Fatura gerada
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-1 flex-wrap">
+                    {order.status !== 'finalizada' && order.status !== 'cancelada' && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-11 text-sm text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50"
+                        onClick={() => setFinalizeTarget(order)}
+                      >
+                        <CheckCircle2 className="h-4 w-4 mr-1.5" /> Finalizar
+                      </Button>
+                    )}
+                    {order.status === 'finalizada' && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-11 text-sm text-rose-600 hover:text-rose-700 hover:bg-rose-50"
+                        onClick={() => setCancelTarget(order)}
+                      >
+                        <XCircle className="h-4 w-4 mr-1.5" /> Cancelar
+                      </Button>
+                    )}
+                    <div className="flex-1" />
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-11 w-11 text-slate-500 hover:text-blue-600"
+                      onClick={() => openEdit(order)}
+                      title="Editar"
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-11 w-11 text-rose-500 hover:text-rose-700 hover:bg-rose-50"
+                      onClick={() => handleDelete(order)}
+                      title="Excluir"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+
+            {/* DESKTOP: tabela completa (escondida no celular) */}
+            <div className="hidden md:block">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-slate-50">
+                    <TableHead>Número</TableHead>
+                    <TableHead>Cliente</TableHead>
+                    <TableHead>Abertura</TableHead>
+                    <TableHead>Itens</TableHead>
+                    <TableHead>Total</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-right">Ações</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+                </TableHeader>
+                <TableBody className="divide-y divide-slate-100">
+                  {filtered.map((order) => (
+                    <TableRow key={order.id} className="hover:bg-slate-50/70">
+                      <TableCell className="font-semibold text-slate-900">
+                        {order.number || '—'}
+                      </TableCell>
+                      <TableCell>
+                        <div className="font-medium text-slate-800">{getClientName(order)}</div>
+                        {order.expand?.responsible_id && (
+                          <div className="text-xs text-slate-400">
+                            Resp.: {order.expand.responsible_id.name}
+                          </div>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-xs text-slate-500">
+                        {(order.opened_at || order.created || '')
+                          .slice(0, 10)
+                          .split('-')
+                          .reverse()
+                          .join('/')}
+                      </TableCell>
+                      <TableCell className="text-xs text-slate-500">
+                        {(order.items || []).length} item(ns)
+                      </TableCell>
+                      <TableCell className="font-medium text-slate-900">
+                        {(order.total_value || 0).toLocaleString('pt-BR', {
+                          style: 'currency',
+                          currency: 'BRL',
+                        })}
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex flex-col gap-1 items-start">
+                          <Badge className={cn('text-xs', statusBadgeClasses[order.status])}>
+                            {serviceOrderStatusLabels[order.status]}
+                          </Badge>
+                          {order.invoice_id && (
+                            <span className="text-[10px] text-emerald-600 flex items-center gap-1">
+                              <CheckCircle2 className="h-3 w-3" /> Fatura gerada
+                            </span>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          {order.status !== 'finalizada' && order.status !== 'cancelada' && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-11 text-xs text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50"
+                              onClick={() => setFinalizeTarget(order)}
+                            >
+                              <CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Finalizar
+                            </Button>
+                          )}
+                          {order.status === 'finalizada' && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-11 text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50"
+                              onClick={() => setCancelTarget(order)}
+                            >
+                              <XCircle className="h-3.5 w-3.5 mr-1" /> Cancelar
+                            </Button>
+                          )}
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-11 w-11 text-slate-500 hover:text-blue-600"
+                            onClick={() => openEdit(order)}
+                            title="Editar"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-11 w-11 text-rose-500 hover:text-rose-700 hover:bg-rose-50"
+                            onClick={() => handleDelete(order)}
+                            title="Excluir"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </>
         )}
       </div>
 
