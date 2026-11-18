@@ -557,19 +557,71 @@ routerAdd(
         // voltava {}, perdendo name/phone/order_type/address/client_id e a
         // lista de slots (o cliente ficava preso no loop da lista de
         // horários). Ler com getString e reconstruir SEMPRE um objeto plano.
+        // Decodifica bytes UTF-8 em string JS (surrogates incluídos p/ emoji).
+        // String.fromCharCode direto tratava cada BYTE como Latin-1: "í"
+        // (0xC3 0xAD) virava "Ã­" — o mojibake "Jd paraÃ­so" visto nas
+        // mensagens montadas a partir do schedule_data re-lido do banco.
+        const decodeUtf8Bytes = (bytes) => {
+          let out = ''
+          let i = 0
+          const n = bytes.length
+          while (i < n) {
+            const b = bytes[i]
+            let cp = b
+            if (b < 0x80) {
+              i += 1
+            } else if ((b & 0xe0) === 0xc0 && i + 1 < n) {
+              cp = ((b & 0x1f) << 6) | (bytes[i + 1] & 0x3f)
+              i += 2
+            } else if ((b & 0xf0) === 0xe0 && i + 2 < n) {
+              cp = ((b & 0x0f) << 12) | ((bytes[i + 1] & 0x3f) << 6) | (bytes[i + 2] & 0x3f)
+              i += 3
+            } else if ((b & 0xf8) === 0xf0 && i + 3 < n) {
+              cp =
+                ((b & 0x07) << 18) |
+                ((bytes[i + 1] & 0x3f) << 12) |
+                ((bytes[i + 2] & 0x3f) << 6) |
+                (bytes[i + 3] & 0x3f)
+              i += 4
+            } else {
+              i += 1
+            }
+            if (cp > 0xffff) {
+              cp -= 0x10000
+              out += String.fromCharCode(0xd800 + (cp >> 10), 0xdc00 + (cp & 0x3ff))
+            } else {
+              out += String.fromCharCode(cp)
+            }
+          }
+          return out
+        }
+        // Repara mojibake já GRAVADO por versões antigas (texto UTF-8 lido
+        // como Latin-1: "paraÃ­so"). Padrão típico: um caractere acentuado
+        // (U+00C0–U+00FF) seguido de caractere da faixa de continuação
+        // (U+0080–U+00BF) — em texto português legítimo isso não ocorre.
+        const repairUtf8Mojibake = (s) => {
+          if (!s || !/[\u00c0-\u00ff][\u0080-\u00bf]/.test(s)) return s
+          const bytes = []
+          for (let i = 0; i < s.length; i++) {
+            const cp = s.charCodeAt(i)
+            if (cp > 0xff) return s // caractere fora do Latin-1: não é mojibake simples
+            bytes.push(cp)
+          }
+          return decodeUtf8Bytes(bytes)
+        }
         const readSchedDataAsString = (raw) => {
           if (raw === undefined || raw === null) return ''
-          if (typeof raw === 'string') return raw
+          if (typeof raw === 'string') return repairUtf8Mojibake(raw)
           if (Array.isArray(raw) && raw.length > 0 && typeof raw[0] === 'number') {
             try {
-              return String.fromCharCode.apply(null, raw)
+              return repairUtf8Mojibake(decodeUtf8Bytes(raw))
             } catch (_) {
               return ''
             }
           }
           if (raw && typeof raw === 'object') {
             try {
-              return JSON.stringify(raw)
+              return repairUtf8Mojibake(JSON.stringify(raw))
             } catch (_) {
               return ''
             }
@@ -1069,7 +1121,7 @@ routerAdd(
                 '! Encontrei seu cadastro aqui. É você mesmo?' +
                 '\n\n' +
                 describeClient(clientRecord) +
-                '\n\nResponda 1 para SIM (aí confirmamos o ENDEREÇO do atendimento) ou 2 para NÃO (aí eu confiro seus dados com você).',
+                '\n\nResponda 1 para SIM (o atendimento será no endereço do cadastro) ou 2 para NÃO (aí eu confiro seus dados com você).',
             )
             return
           }
@@ -1135,7 +1187,7 @@ routerAdd(
         // endereço que será usado na OS (o digitado no fluxo tem prioridade;
         // sem ele, o do cadastro) e pede confirmação. Cadastro sem endereço
         // nenhum pede para digitar. Só depois de confirmado vêm os horários.
-        const startAddressStep = (clientRec) => {
+        const startAddressStep = (clientRec, skipConfirmation) => {
           const typed = String(scheduleData.address || '').trim()
           const addr = typed || (clientRec ? clientFullAddress(clientRec) : '')
           if (clientRec) scheduleData.client_id = clientRec.id
@@ -1147,6 +1199,21 @@ routerAdd(
             sendAutoReply(
               'Agora me confirme o ENDEREÇO do atendimento (rua, número, bairro e cidade):',
             )
+            return
+          }
+          if (skipConfirmation) {
+            // Endereço JÁ CONFIRMADO pelo cliente em um passo anterior (ex.: a
+            // mensagem "Confirme os dados para a visita técnica ... Está
+            // correto?" ou "É você mesmo? ... (aí confirmamos o ENDEREÇO)"),
+            // onde o endereço já foi exibido e o cliente respondeu 1 = SIM.
+            // Pular a segunda confirmação e ir direto para os horários — antes
+            // o MESMO endereço era perguntado duas vezes seguidas.
+            scheduleState = 'awaiting_slot'
+            saveScheduleState()
+            console.log(
+              '[whatsapp] agendamento: endereço já confirmado no passo anterior — direto para os horários',
+            )
+            sendSlotList()
             return
           }
           scheduleState = 'awaiting_address_confirm'
@@ -1259,9 +1326,9 @@ routerAdd(
               console.log(
                 '[whatsapp] cliente confirmou o cadastro (' +
                   (scheduleData.order_type === 'visita_tecnica' ? 'opção 3' : 'opção 2') +
-                  ') — confirmando o ENDEREÇO antes dos horários',
+                  ') — endereço já exibido e confirmado — direto para os horários',
               )
-              startAddressStep(c)
+              startAddressStep(c, true)
               return
             }
             if (trimmed === '2') {
@@ -1450,10 +1517,10 @@ routerAdd(
                 return
               }
               console.log(
-                '[whatsapp] agendamento: cadastro confirmado — confirmando o ENDEREÇO antes dos horários',
+                '[whatsapp] agendamento: cadastro confirmado — endereço já exibido e confirmado — direto para os horários',
               )
               scheduleData.attempts = 0
-              startAddressStep(c)
+              startAddressStep(c, true)
               return
             }
             if (trimmed === '2') {
@@ -1829,10 +1896,10 @@ routerAdd(
                 return
               }
               console.log(
-                '[whatsapp] visita técnica: cadastro confirmado — confirmando o ENDEREÇO antes dos horários',
+                '[whatsapp] visita técnica: cadastro confirmado — endereço já confirmado na etapa anterior — direto para os horários',
               )
               scheduleData.attempts = 0
-              startAddressStep(c)
+              startAddressStep(c, true)
               return
             }
             if (trimmed === '2') {
