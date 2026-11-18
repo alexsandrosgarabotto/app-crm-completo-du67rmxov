@@ -587,34 +587,69 @@ onRecordCreate((e) => {
     const statusNovo = String(order.get('status') || 'aberta')
     const clientName = String((clientRecord && clientRecord.get('name')) || '').trim()
     const primeiroNome = clientName.split(' ')[0] || ''
-    let quando = ''
+    // Agenda da OS: hora de parede LITERAL ('2026-11-19 08:00:00.000Z' = 08:00
+    // LOCAIS do negócio, convenção do bot desde a v0.0.49). new Date(...) +
+    // toLocaleTimeString reconverte para o fuso do servidor e mostrava horário
+    // errado (Bug 2) — extrair data/hora da string SEM converter fuso.
+    const formatAgendamentoLocal = (value) => {
+      const raw = String(value || '')
+      const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(raw)
+      if (m) {
+        return m[3] + '/' + m[2] + '/' + m[1] + ' às ' + m[4] + ':' + m[5]
+      }
+      const d = new Date(raw)
+      return (
+        d.toLocaleDateString('pt-BR') +
+        ' às ' +
+        d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+      )
+    }
     const agendamento = String(order.get('agendamento_para') || '')
+    let quando = ''
     if (agendamento) {
       try {
-        const d = new Date(agendamento)
         quando =
-          ' Visita agendada para ' +
-          d.toLocaleDateString('pt-BR') +
-          ' às ' +
-          d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) +
-          '.'
+          ' Agendada para ' +
+          formatAgendamentoLocal(agendamento) +
+          '. Nossa equipe comparecerá no horário combinado.'
       } catch (_) {}
     }
-    const texto =
-      statusNovo === 'aberta'
-        ? 'Recebemos seu pedido' +
-          (primeiroNome ? ', ' + primeiroNome : '') +
-          '! Sua ordem de serviço ' +
+    // OS criada pelo fluxo conversacional do WhatsApp (conversation_id +
+    // agendamento gravados pelo bot): o cliente JÁ recebeu a confirmação
+    // "Agendado! Sua ordem de serviço N° ... às ..." do próprio fluxo — este
+    // aviso duplicaria (e dizia "entraremos em contato" por cima da
+    // confirmação). Pula sem enviar.
+    const veioDoFluxoWhatsapp =
+      String(order.get('conversation_id') || '') !== '' &&
+      (String(order.get('scheduled_date') || '') !== '' || agendamento !== '')
+    if (veioDoFluxoWhatsapp) {
+      console.log(
+        '[os-whatsapp] OS ' +
           orderNumber +
-          ' foi aberta.' +
-          (quando ? ' ' + quando : '') +
-          ' Em breve entraremos em contato.'
-        : 'Sua ordem de serviço ' +
-          orderNumber +
-          ' foi registrada com status "' +
-          statusNovo +
-          '".' +
-          (quando ? ' ' + quando : '')
+          ': criada pelo fluxo do WhatsApp — confirmação já enviada pelo bot, aviso de criação pulado',
+      )
+      e.next()
+      return
+    }
+
+    let texto = ''
+    if (statusNovo === 'aberta') {
+      texto =
+        'Recebemos seu pedido' +
+        (primeiroNome ? ', ' + primeiroNome : '') +
+        '! Sua ordem de serviço ' +
+        orderNumber +
+        ' foi aberta.' +
+        (quando ? quando : ' Em breve entraremos em contato.')
+    } else {
+      texto =
+        'Sua ordem de serviço ' +
+        orderNumber +
+        ' foi registrada com status "' +
+        statusNovo +
+        '".' +
+        (quando ? ' ' + quando : '')
+    }
 
     sendWhatsApp(rawPhone, texto)
 

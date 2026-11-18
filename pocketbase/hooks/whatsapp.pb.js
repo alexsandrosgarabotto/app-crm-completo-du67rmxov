@@ -995,7 +995,49 @@ routerAdd(
           return hits
         }
 
+        // Cliente JÁ CADASTRADO: quando o telefone do remetente já existe no
+        // cadastro de clientes com um nome real (pedido do dono: "já pelo
+        // contato do cliente pode-se ver se já tem cadastro"), o fluxo pula
+        // nome/telefone e vai direto para a escolha de data/horário — o bot
+        // cumprimenta pelo nome e confirma se é ele. Cadastros automáticos
+        // ("Contato WhatsApp NNNN") não contam: aí o fluxo pede os dados como
+        // antes. O dono do CRM pode ter corrigido o nome do cadastro, então o
+        // nome REAL do cadastro vence o que o estado antigo guardava.
+        const isAutoClientName = (n) =>
+          !String(n || '').trim() ||
+          /^contato whatsapp \d+$/.test(String(n).trim().toLowerCase()) ||
+          /^cliente whatsapp$/.test(String(n).trim().toLowerCase())
+
         const scheduleIntro = (tipo) => {
+          const cadName = String(clientRecord.get('name') || '').trim()
+          const knownClient = !isAutoClientName(cadName) && findClientsByPhone(rawPhone).length > 0
+          if (knownClient) {
+            scheduleState = 'awaiting_slot'
+            scheduleData = {
+              order_type: tipo,
+              name: cadName,
+              phone: String(clientRecord.get('phone') || '').trim() || normalizePhone(rawPhone),
+              client_id: clientRecord.id,
+              attempts: 0,
+            }
+            saveScheduleState()
+            console.log(
+              '[whatsapp] fluxo (' +
+                (tipo === 'visita_tecnica' ? 'opção 3' : 'opção 2') +
+                '): cliente JÁ CADASTRADO reconhecido pelo telefone — client_id=' +
+                clientRecord.id +
+                ', pulando para escolha de horário',
+            )
+            sendAutoReply(
+              'Olá' +
+                (cadName.split(' ')[0] ? ', ' + cadName.split(' ')[0] : '') +
+                '! Encontrei seu cadastro aqui. É você mesmo?' +
+                '\n\n' +
+                describeClient(clientRecord) +
+                '\n\nResponda 1 para SIM e já escolhemos a data e o horário, ou 2 para NÃO (aí eu confiro seus dados com você).',
+            )
+            return
+          }
           if (tipo === 'visita_tecnica') {
             // Visita técnica: primeiro o nome completo do cadastro...
             scheduleState = 'vt_name'
@@ -1138,6 +1180,44 @@ routerAdd(
         }
 
         const handleScheduleFlow = () => {
+          if (scheduleState === 'awaiting_known_confirm') {
+            // Confirmação do cliente reconhecido pelo telefone do cadastro.
+            if (trimmed === '1') {
+              scheduleState = 'awaiting_slot'
+              scheduleData.attempts = 0
+              saveScheduleState()
+              console.log(
+                '[whatsapp] cliente confirmou o cadastro (' +
+                  (scheduleData.order_type === 'visita_tecnica' ? 'opção 3' : 'opção 2') +
+                  ') — indo direto para os horários',
+              )
+              sendSlotList()
+              return
+            }
+            if (trimmed === '2') {
+              // Não é ele: refaz o fluxo pedindo os dados do começo.
+              const tipo = scheduleData.order_type
+              scheduleData = { order_type: tipo, attempts: 0 }
+              if (tipo === 'visita_tecnica') {
+                scheduleState = 'vt_name'
+                saveScheduleState()
+                sendAutoReply('Sem problemas. ' + VT_ASK_NAME)
+              } else {
+                scheduleState = 'awaiting_name'
+                saveScheduleState()
+                sendAutoReply('Sem problemas. ' + ASK_NAME)
+              }
+              return
+            }
+            if (bumpAttempts()) {
+              clearScheduleState()
+              sendAutoReply(GIVE_UP_TEXT)
+              return
+            }
+            sendAutoReply('Por favor, responda 1 para SIM ou 2 para NÃO.')
+            return
+          }
+
           if (scheduleState === 'awaiting_name') {
             const parsed = parseNameAndPhone(trimmed)
             if (!parsed.phone || parsed.name.length < 3) {

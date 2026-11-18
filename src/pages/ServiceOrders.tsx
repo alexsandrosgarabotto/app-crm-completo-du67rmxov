@@ -64,6 +64,7 @@ import {
 } from '@/components/ui/table'
 import { toast } from '@/hooks/use-toast'
 import { cn } from '@/lib/utils'
+import { parseAgendamento } from '@/lib/agendaUtils'
 import { SignaturePad } from '@/components/serviceOrders/SignaturePad'
 import { PhotoReport } from '@/components/serviceOrders/PhotoReport'
 import { ServiceOrderClientData } from '@/components/serviceOrders/ServiceOrderClientData'
@@ -269,7 +270,9 @@ export default function ServiceOrdersPage() {
 
   const openEdit = (order: ServiceOrder) => {
     setAvisoInfo(null)
-    const ag = order.agendamento_para ? new Date(order.agendamento_para) : null
+    // HORA DE PAREDE: ler o agendamento SEM reconversão de fuso (mesma
+    // convenção do bot — ver parseAgendamento em agendaUtils).
+    const ag = parseAgendamento(order.agendamento_para)
     setForm({
       id: order.id,
       number: order.number,
@@ -434,8 +437,16 @@ export default function ServiceOrdersPage() {
       items,
       total_value: total,
       conversation_id: form.conversation_id || undefined,
+      // scheduled_date/scheduled_time são a fonte da verdade do agendamento
+      // (hook da OS e Agenda usam para bloqueios e exibição); gravados como
+      // texto HH:mm puro, sem fuso.
+      scheduled_date: form.agendamento_data || undefined,
+      scheduled_time: form.agendamento_data ? form.agendamento_hora || '09:00' : undefined,
+      // HORA DE PAREDE literal (mesma convenção do bot): a data com horário
+      // digitado é o horário local do negócio — sem new Date().toISOString(),
+      // que deslocava o horário na gravação (bug do fuso).
       agendamento_para: form.agendamento_data
-        ? new Date(`${form.agendamento_data}T${form.agendamento_hora || '09:00'}:00`).toISOString()
+        ? `${form.agendamento_data} ${form.agendamento_hora || '09:00'}:00.000Z`
         : undefined,
     }
 

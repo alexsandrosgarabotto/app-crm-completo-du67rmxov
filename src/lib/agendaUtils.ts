@@ -31,10 +31,27 @@ export function shortDate(key: string): string {
   return `${d}/${m}`
 }
 
+/**
+ * Interpreta o agendamento da OS SEM converter fuso. O bot do WhatsApp grava
+ * HORA DE PAREDE literal ('2026-11-19 08:00:00.000Z' = 08:00 LOCAIS do
+ * negócio) — refazer new Date() nela e ler getHours() reconverte para o fuso
+ * do navegador e mostra horário errado (bug reportado). Formato ISO com 'T'
+ * segue o caminho normal de Date.
+ */
+export function parseAgendamento(value?: string): Date | null {
+  if (!value) return null
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ ](\d{2}):(\d{2})/.exec(value)
+  if (m) {
+    return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5])
+  }
+  const d = new Date(value)
+  return isNaN(d.getTime()) ? null : d
+}
+
 /** Hora (HH:mm) do agendamento da OS, '' quando não tem. */
 export function agendamentoHora(order: ServiceOrder): string {
-  if (!order.agendamento_para) return ''
-  const d = new Date(order.agendamento_para)
+  const d = parseAgendamento(order.agendamento_para)
+  if (!d) return ''
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
@@ -43,7 +60,9 @@ export function groupOrdersByDay(orders: ServiceOrder[]): Map<string, ServiceOrd
   const map = new Map<string, ServiceOrder[]>()
   for (const order of orders) {
     if (!order.agendamento_para) continue
-    const key = toKey(new Date(order.agendamento_para))
+    const d = parseAgendamento(order.agendamento_para)
+    if (!d) continue
+    const key = toKey(d)
     const list = map.get(key) || []
     list.push(order)
     map.set(key, list)
