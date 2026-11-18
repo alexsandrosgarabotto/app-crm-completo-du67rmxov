@@ -87,6 +87,26 @@ routerAdd(
       return t.length > 4 ? '...' + t.slice(-4) : '***'
     }
 
+    // Datas do bot: agendamento_para é gravado como HORA DE PAREDE literal do
+    // horário local do negócio (ex.: '2026-11-19 08:00:00.000Z' significa
+    // 08:00 LOCAIS, não UTC) — formato criado em v0.0.49. Mensagens antigas
+    // (instante real, com offset negativo) são reconhecidas e formatadas
+    // normalmente. A formatação extrai data/hora da string SEM converter
+    // fuso, para o aviso mostrar exatamente o horário escolhido.
+    const formatAgendamentoLocal = (value) => {
+      const raw = String(value || '')
+      const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(raw)
+      if (m) {
+        return m[3] + '/' + m[2] + '/' + m[1] + ' às ' + m[4] + ':' + m[5]
+      }
+      const d = new Date(raw)
+      return (
+        d.toLocaleDateString('pt-BR') +
+        ' às ' +
+        d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+      )
+    }
+
     // --- Envio pelo canal Meta (idêntico ao whatsapp.pb.js) ------------------
     const sendViaMetaGraphApi = (to, text) => {
       const phoneNumberId = readConfig('phone_number_id')
@@ -225,12 +245,7 @@ routerAdd(
       let quando = ''
       if (agendamento) {
         try {
-          const d = new Date(agendamento)
-          quando =
-            ' para ' +
-            d.toLocaleDateString('pt-BR') +
-            ' às ' +
-            d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+          quando = ' para ' + formatAgendamentoLocal(agendamento)
         } catch (_) {}
       }
       return String(text)

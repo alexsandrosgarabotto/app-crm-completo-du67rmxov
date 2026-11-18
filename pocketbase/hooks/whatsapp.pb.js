@@ -1076,19 +1076,15 @@ routerAdd(
           orderRecord.set('scheduled_date', slot.date)
           orderRecord.set('scheduled_time', slot.time)
           // agendamento_para (date) — é o campo que o calendário da Agenda usa
-          // para posicionar a OS no dia/hora.
-          const dateParts = String(slot.date || '').split('-')
-          const timeParts = String(slot.time || '').split(':')
-          if (dateParts.length === 3 && timeParts.length >= 2) {
-            const when = new Date(
-              parseInt(dateParts[0], 10),
-              parseInt(dateParts[1], 10) - 1,
-              parseInt(dateParts[2], 10),
-              parseInt(timeParts[0], 10),
-              parseInt(timeParts[1], 10),
-            )
-            orderRecord.set('agendamento_para', when.toISOString())
-          }
+          // para posicionar a OS no dia/hora. PocketBase grava datas em UTC e
+          // o servidor roda em UTC: interpretar o horário de parede com
+          // new Date(...) local do servidor gravava 08:00 como 08:00Z e o
+          // navegador exibia 04:00 (Bug 2). Gravamos a HORA DE PAREDE LITERAL
+          // ('2026-11-19 08:00:00.000Z' = 08:00 LOCAIS do negócio) e o
+          // frontend lê a string SEM converter fuso (agendaUtils e ficha de
+          // OS) — o horário mostrado, ofertado e gravado é sempre o escolhido,
+          // independente do fuso do navegador de quem acessa o CRM.
+          orderRecord.set('agendamento_para', slot.date + ' ' + slot.time + ':00.000Z')
           orderRecord.set('stock_released', false)
           // Técnico principal: o primeiro técnico ativo cadastrado.
           try {
@@ -1397,15 +1393,18 @@ routerAdd(
                 },
                 desc,
               )
+              // Mensagem FINAL do fluxo: sempre a CONFIRMAÇÃO do agendamento
+              // com o número da OS e a data com horário escolhido (pedido do
+              // dono) — sem aviso de "entraremos em contato".
               sendAutoReply(
-                'Pronto! Sua ordem de serviço ' +
+                'Agendado! Sua ordem de serviço N° ' +
                   String(order.get('number') || '') +
-                  ' foi aberta para ' +
+                  ' está marcada para ' +
                   slotKeyLabel(
                     String(scheduleData.chosen_date || ''),
                     String(scheduleData.chosen_time || ''),
                   ) +
-                  '. Em breve nossa equipe entrará em contato. Obrigado!',
+                  '. Obrigado pela confiança!',
               )
               clearScheduleState()
             } catch (orderErr) {
