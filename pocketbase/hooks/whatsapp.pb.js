@@ -233,6 +233,10 @@ routerAdd(
     // evento com este marcador, são gravadas na conversa e recebem orientação
     // para reenviar em texto.
     const MEDIA_NO_TEXT = '[mídia sem texto]'
+    // Texto da orientação de reenvio (uma única definição — o rate-limit do
+    // circuit-breaker precisa comparar com EXATAMENTE o texto enviado).
+    const MEDIA_FALLBACK_TEXT =
+      'Recebi um áudio/mídia, mas não consigo processar esse formato por aqui. Por favor, escreva sua mensagem em texto.'
     if (Array.isArray(body.entry)) {
       for (const entry of body.entry || []) {
         for (const change of (entry && entry.changes) || []) {
@@ -298,6 +302,16 @@ routerAdd(
                 )
                 continue
               }
+              // Log do tipo exato: é o que permite diagnosticar nos logs QUE
+              // evento da Meta disparou a orientação (bug 18/11: avisos
+              // "aleatórios" eram eventos de mídia invisíveis no chat).
+              console.log(
+                '[whatsapp] mídia real sem texto (tipo=' +
+                  msgType +
+                  ') de ' +
+                  String((msg && msg.from) || '') +
+                  ' — gravando; orientação sujeita ao circuit-breaker',
+              )
               events.push({
                 phone: String(msg.from || ''),
                 text: MEDIA_NO_TEXT,
@@ -964,7 +978,18 @@ routerAdd(
         }
 
         // Envia um texto pelo canal Meta e grava a mensagem outbound na conversa.
+        // FAIL-SAFE central: TODA resposta automática passa por aqui, então a
+        // checagem do modo de validação vive DENTRO — nenhum caminho futuro
+        // consegue enviar para fora da lista de teste, mesmo que esqueça a
+        // checagem no ramo dele.
         const sendAutoReply = (body) => {
+          if (!autoReplyAllowed) {
+            console.log(
+              '[whatsapp] BLOQUEIO fail-safe: resposta automática não saiu (modo validação ativo, número fora da lista de teste): ' +
+                rawPhone,
+            )
+            return false
+          }
           sendWhatsApp(rawPhone, body)
           const outboundRecord = new Record(messagesCollection)
           outboundRecord.set('conversation_id', conversation.id)
@@ -2033,16 +2058,43 @@ routerAdd(
           // Modo validação: remetente fora da lista de teste — nada sai.
           // A mensagem já foi gravada; fica para atendimento manual.
         } else if (text === MEDIA_NO_TEXT) {
-          // Áudio/imagem/sticker sem texto: orienta o reenvio em texto SEM
-          // alterar o estado do fluxo (antes: nada era gravado nem respondido).
+          // Áudio/imagem sem texto: orienta o reenvio em texto SEM alterar o
+          // estado do fluxo. CIRCUIT-BREAKER: no máximo UMA orientação a cada
+          // 30 min por conversa — eventos repetidos da Meta (mídia apagada,
+          // view-once, edição, reentregas com wamid novo) NÃO podem bombardear
+          // o cliente com a mesma mensagem (bug 18/11: 4 avisos em 1h20).
+          const MEDIA_FALLBACK_COOLDOWN_MIN = 30
+          let fallbackRecente = false
           try {
-            sendAutoReply(
-              'Recebi um áudio/mídia, mas não consigo processar esse formato por aqui. Por favor, escreva sua mensagem em texto.',
+            const cutoffIso = new Date(Date.now() - MEDIA_FALLBACK_COOLDOWN_MIN * 60000)
+              .toISOString()
+              .replace('T', ' ')
+            const recentes = app.findRecordsByFilter(
+              'whatsapp_messages',
+              "conversation_id = {:cid} && direction = 'outbound' && body = {:body} && created > {:since}",
+              '-created',
+              1,
+              0,
+              { cid: conversation.id, body: MEDIA_FALLBACK_TEXT, since: cutoffIso },
             )
-            sentOk = true
-          } catch (sendErr) {
-            sendError = String(sendErr)
-            console.log('[whatsapp] aviso: orientação de mídia sem texto não enviada:', sendErr)
+            fallbackRecente = recentes.length > 0
+          } catch (rateErr) {
+            console.log('[whatsapp] aviso: checagem do circuit-breaker de mídia falhou:', rateErr)
+          }
+          if (fallbackRecente) {
+            console.log(
+              '[whatsapp] circuit-breaker: orientação de mídia já enviada nesta conversa nos últimos ' +
+                MEDIA_FALLBACK_COOLDOWN_MIN +
+                ' min — NADA reenviado ao cliente',
+            )
+          } else {
+            try {
+              sendAutoReply(MEDIA_FALLBACK_TEXT)
+              sentOk = true
+            } catch (sendErr) {
+              sendError = String(sendErr)
+              console.log('[whatsapp] aviso: orientação de mídia sem texto não enviada:', sendErr)
+            }
           }
         } else if (scheduleState && isGreeting) {
           // Cumprimento no meio do fluxo: Reinicia o atendimento do zero —
