@@ -457,13 +457,22 @@ routerAdd(
         app.save(conversation)
 
         // --- Agendamento conversacional (opções 2 = orçamento, 3 = visita) -------
-        // Fluxo: nome + telefone -> busca/confirmação de cadastro -> slots de
-        // agenda (seg-sex, 08:00/09:00/10:00, sem sábados/domingos/feriados/
-        // reservas, slots de 1h sem choque) -> criação da OS com o técnico
-        // principal (primeiro technician ativo). Estado na conversa:
-        // schedule_state ('awaiting_name' | 'awaiting_confirm' | 'awaiting_slot')
-        // + schedule_data (json) — migração 0023.
+        // Opção 2 (orçamento): nome + telefone -> busca/confirmação de cadastro
+        // -> slots de agenda (seg-sex, 08:00/09:00/10:00, sem sábados/domingos/
+        // feriados/reservas, slots de 1h sem choque) -> criação da OS com o
+        // técnico principal (primeiro technician ativo).
+        // Opção 3 (visita técnica): nome completo -> telefone -> busca por nome +
+        // telefone -> confirmação do cadastro OU escolha do endereço (vários
+        // cadastros) OU endereço informado (não localizado) -> slots nos DOIS
+        // turnos (manhã 08:00-11:00, tarde 13:30-17:30, 1h de intervalo).
+        // Estado na conversa: schedule_state ('awaiting_name' |
+        // 'awaiting_confirm' | 'awaiting_pick' | 'awaiting_slot' | 'vt_name' |
+        // 'vt_phone' | 'vt_confirm' | 'vt_pick' | 'vt_address') +
+        // schedule_data (json) — migração 0023.
         const SCHEDULE_SLOTS = ['08:00', '09:00', '10:00']
+        // Visita técnica: dois turnos — manhã das 08:00 às 11:00 e tarde das
+        // 13:30 às 17:30, com 1h de intervalo entre atendimentos.
+        const VISITA_SLOTS = ['08:00', '09:00', '10:00', '13:30', '14:30', '15:30', '16:30']
         const SCHEDULE_MAX_SLOTS = 10
         const WEEKDAY_NAMES = [
           'Domingo',
@@ -599,10 +608,14 @@ routerAdd(
           }
         }
 
-        // Próximos slots livres: dias úteis (seg-sex) a partir de amanhã,
-        // horários de ponto 08:00/09:00/10:00 (intervalo mínimo de 1h garantido
-        // porque cada slot é de 1h e um slot ocupado não é ofertado).
-        const buildScheduleSlots = (blockers) => {
+        // Próximos slots livres: dias úteis (seg-sex) a partir de amanhã.
+        // Orçamento (padrão): horários de ponto 08:00/09:00/10:00.
+        // Visita técnica (isVisita): DOIS TURNOS — manhã das 08:00 às 11:00
+        // (08:00/09:00/10:00) e tarde das 13:30 às 17:30 (13:30/14:30/15:30/
+        // 16:30), com 1h de intervalo entre atendimentos (cada slot é de 1h e
+        // um horário ocupado/reservado não é ofertado). Sem sábados, domingos,
+        // feriados (coleção holidays) e reservas de dia inteiro.
+        const buildScheduleSlots = (blockers, isVisita) => {
           const slots = []
           const day = new Date()
           day.setHours(0, 0, 0, 0)
@@ -619,7 +632,8 @@ routerAdd(
             if (dow === 0 || dow === 6) continue
             if (blockers.holidaySet[key]) continue
             if (blockers.reservedFull[key]) continue
-            for (const time of SCHEDULE_SLOTS) {
+            const daySlots = isVisita ? VISITA_SLOTS : SCHEDULE_SLOTS
+            for (const time of daySlots) {
               if (slots.length >= SCHEDULE_MAX_SLOTS) break
               if ((blockers.busy[key] || {})[time]) continue
               if ((blockers.reservedTimes[key] || {})[time]) continue
@@ -805,13 +819,20 @@ routerAdd(
         let sendError = ''
 
         // --- Fluxo conversacional de agendamento (opções 2 e 3) -----------------
-        // 2 = orçamento, 3 = visita técnica. Estados em schedule_state:
+        // 2 = orçamento. Estados em schedule_state:
         // awaiting_name -> awaiting_confirm (ou awaiting_pick) -> awaiting_slot.
         const ASK_NAME =
           'Ótimo! Para começar, me confirme seu nome completo e o telefone com DDD (ex.: (66) 99999-0000):'
         const GIVE_UP_TEXT =
           'Não consegui entender sua resposta. Vou transferir para um atendente humano — ele vai te responder por aqui mesmo.'
         const SCHEDULE_MAX_ATTEMPTS = 3
+
+        // Visita técnica (opção 3): fluxo próprio, separado da opção 2.
+        // Estados: vt_name -> vt_phone -> vt_confirm (1 cadastro) /
+        // vt_pick (vários cadastros: escolha do ENDEREÇO) / vt_address
+        // (cadastro não localizado: endereço informado) -> awaiting_slot.
+        const VT_ASK_NAME =
+          'Perfeito! Vamos agendar sua VISITA TÉCNICA. Primeiro, digite seu nome completo do cadastro:'
 
         const formatPhonePretty = (phoneDigits) => {
           const d = String(phoneDigits || '').replace(/\D/g, '')
@@ -856,24 +877,49 @@ routerAdd(
           return matches
         }
 
+        // Busca tolerante de cadastros pelo nome (case-insensitive): cada token
+        // (>= 3 letras) do nome digitado precisa existir no nome do cadastro.
+        // O telefone é combinado depois (mesmo DDD + finais, samePhone).
+        const findClientsByName = (typedName) => {
+          const tokens = String(typedName || '')
+            .toLowerCase()
+            .replace(/[^\p{L}\s]/gu, ' ')
+            .split(/\s+/)
+            .filter((t) => t.length >= 3)
+          if (tokens.length === 0) return []
+          const hits = []
+          try {
+            const all = app.findRecordsByFilter('clients', '', '-created', 500, 0)
+            for (const record of all) {
+              const nm = String(record.get('name') || '').toLowerCase()
+              if (!nm) continue
+              if (tokens.every((t) => nm.indexOf(t) !== -1)) hits.push(record)
+            }
+          } catch (_) {}
+          return hits
+        }
+
         const scheduleIntro = (tipo) => {
+          if (tipo === 'visita_tecnica') {
+            // Visita técnica: primeiro o nome completo do cadastro...
+            scheduleState = 'vt_name'
+            scheduleData = { order_type: tipo, attempts: 0 }
+            saveScheduleState()
+            console.log('[whatsapp] fluxo de VISITA TÉCNICA iniciado (opção 3) para ' + rawPhone)
+            sendAutoReply(VT_ASK_NAME)
+            return
+          }
           scheduleState = 'awaiting_name'
           scheduleData = { order_type: tipo, attempts: 0 }
           saveScheduleState()
-          console.log(
-            '[whatsapp] fluxo de agendamento iniciado (opção ' +
-              (tipo === 'orcamento' ? '2' : '3') +
-              ', tipo ' +
-              tipo +
-              ') para ' +
-              rawPhone,
-          )
+          console.log('[whatsapp] fluxo de agendamento iniciado (opção 2) para ' + rawPhone)
           sendAutoReply(ASK_NAME)
         }
 
         const sendSlotList = () => {
           const blockers = loadScheduleBlockers()
-          const slots = buildScheduleSlots(blockers)
+          const isVisita = String(scheduleData.order_type || '') === 'visita_tecnica'
+          const slots = buildScheduleSlots(blockers, isVisita)
           if (slots.length === 0) {
             sendAutoReply(
               'No momento não tenho horários disponíveis nos próximos dias úteis. Registrei seu pedido e um atendente entrará em contato para combinar a melhor data.',
@@ -891,10 +937,25 @@ routerAdd(
           })
           list += '\nResponda com o número da opção desejada:'
           console.log(
-            '[whatsapp] agendamento: slots ofertados: ' +
+            '[whatsapp] agendamento: slots ofertados (' +
+              (isVisita ? 'visita técnica' : 'orçamento') +
+              '): ' +
               slots.map((s) => s.date + ' ' + s.time).join(' | '),
           )
           sendAutoReply(list)
+        }
+
+        // Endereço completo de um cadastro de cliente (rua + cidade/UF).
+        const clientFullAddress = (c) => {
+          const addr = String(c.get('address') || '').trim()
+          const city = String(c.get('city') || '').trim()
+          const state = String(c.get('state') || '').trim()
+          const district = String(c.get('neighborhood') || '').trim()
+          const parts = [addr, district].filter(Boolean).join(', ')
+          const cityState = [city, state].filter(Boolean).join('/')
+          if (parts && cityState) return parts + ' — ' + cityState
+          if (parts || cityState) return parts || cityState
+          return ''
         }
 
         const createScheduledOrder = (clientRec, slot) => {
@@ -923,11 +984,19 @@ routerAdd(
           // Snapshot dos dados do cliente na OS.
           const cNome = String(clientRec.get('name') || scheduleData.name || '').trim()
           const cTelefone = String(clientRec.get('phone') || scheduleData.phone || '').trim()
-          const cEndereco = String(clientRec.get('address') || '').trim()
+          // Visita técnica: o cliente pode ter informado o endereço em texto
+          // livre (cadastro não localizado); ele tem prioridade, pois é o
+          // endereço do atendimento combinado.
+          const typedAddress = String(scheduleData.address || '').trim()
+          const cEndereco = typedAddress || String(clientRec.get('address') || '').trim()
           const cCidade = String(clientRec.get('city') || '').trim()
           const cEstado = String(clientRec.get('state') || '').trim()
           let enderecoOs = cEndereco
-          if (cCidade || cEstado) {
+          if (typedAddress) {
+            if (cCidade || cEstado) {
+              enderecoOs = cEndereco + ' — ' + [cCidade, cEstado].filter(Boolean).join('/')
+            }
+          } else if (cCidade || cEstado) {
             enderecoOs =
               (cEndereco ? cEndereco + ' — ' : '') + [cCidade, cEstado].filter(Boolean).join('/')
           }
@@ -1177,6 +1246,238 @@ routerAdd(
             return
           }
 
+          if (scheduleState === 'vt_name') {
+            // Visita técnica: o cliente digita o nome completo do cadastro.
+            const typed = trimmed.replace(/\s+/g, ' ').trim()
+            if (typed.length < 3 || /\d{4,}/.test(typed)) {
+              if (bumpAttempts()) {
+                clearScheduleState()
+                sendAutoReply(GIVE_UP_TEXT)
+                return
+              }
+              sendAutoReply('Não entendi. Por favor, digite seu NOME COMPLETO do cadastro:')
+              return
+            }
+            scheduleData.name = typed
+            scheduleState = 'vt_phone'
+            scheduleData.attempts = 0
+            saveScheduleState()
+            sendAutoReply(
+              'Obrigado! Agora me confirme seu TELEFONE com DDD (ex.: (66) 99999-0000):',
+            )
+            return
+          }
+
+          if (scheduleState === 'vt_phone') {
+            // Telefone: busca cadastros no sistema combinando nome + telefone.
+            const cleaned = trimmed.replace(/\D/g, '')
+            if (cleaned.length < 10 || cleaned.length > 13) {
+              if (bumpAttempts()) {
+                clearScheduleState()
+                sendAutoReply(GIVE_UP_TEXT)
+                return
+              }
+              sendAutoReply('Não entendi. Envie o telefone com DDD (ex.: (66) 99999-0000):')
+              return
+            }
+            let phoneDigits = cleaned
+            if (phoneDigits.startsWith('55') && phoneDigits.length > 11) {
+              phoneDigits = phoneDigits.slice(2)
+            }
+            scheduleData.phone = phoneDigits
+            scheduleData.attempts = 0
+            saveScheduleState()
+
+            const nameHits = findClientsByName(scheduleData.name)
+            const combined = nameHits.filter((c) =>
+              samePhone(normalizePhone(c.get('phone')), normalizePhone(phoneDigits)),
+            )
+            // Dedup (por id) — a busca por nome pode devolver o mesmo cadastro.
+            const unique = []
+            const seenIds = {}
+            for (const c of combined) {
+              if (!seenIds[c.id]) {
+                seenIds[c.id] = true
+                unique.push(c)
+              }
+            }
+            console.log(
+              '[whatsapp] visita técnica: busca por "' +
+                scheduleData.name +
+                '" + ' +
+                phoneDigits +
+                ' => ' +
+                unique.length +
+                ' cadastro(s)',
+            )
+
+            if (unique.length === 1) {
+              // Cadastro único encontrado: mostra os dados e pede confirmação.
+              const c = unique[0]
+              scheduleState = 'vt_confirm'
+              scheduleData.client_id = c.id
+              scheduleData.attempts = 0
+              saveScheduleState()
+              sendAutoReply(
+                'Encontrei o cadastro:\n' +
+                  describeClient(c) +
+                  '\n\nÉ você mesmo? Responda 1 para SIM ou 2 para NÃO.',
+              )
+              return
+            }
+            if (unique.length > 1) {
+              // Mais de um cadastro: confirma qual ENDEREÇO precisa de atendimento.
+              scheduleState = 'vt_pick'
+              scheduleData.candidate_ids = unique.map((c) => c.id)
+              scheduleData.attempts = 0
+              saveScheduleState()
+              let msg =
+                'Encontrei mais de um cadastro com esse nome. Qual endereço precisa de atendimento?\n'
+              unique.forEach((c, i) => {
+                const addr = clientFullAddress(c) || 'endereço não informado'
+                msg += i + 1 + ') ' + addr + '\n'
+              })
+              msg += '\nResponda com o número do endereço:'
+              sendAutoReply(msg)
+              return
+            }
+            // Não localizou pelo nome + telefone: pede o endereço para a visita.
+            scheduleState = 'vt_address'
+            scheduleData.client_id = ''
+            scheduleData.attempts = 0
+            saveScheduleState()
+            console.log(
+              '[whatsapp] visita técnica: cadastro não localizado para ' +
+                scheduleData.name +
+                ' / ' +
+                phoneDigits +
+                ' — pedindo endereço',
+            )
+            sendAutoReply(
+              'Não encontrei seu cadastro no sistema. Para agendar a visita, me informe o ENDEREÇO completo do atendimento (rua, número, bairro e cidade):',
+            )
+            return
+          }
+
+          if (scheduleState === 'vt_address') {
+            // Endereço informado em texto livre (cadastro não localizado).
+            const addr = trimmed.replace(/\s+/g, ' ').trim()
+            if (addr.length < 5) {
+              if (bumpAttempts()) {
+                clearScheduleState()
+                sendAutoReply(GIVE_UP_TEXT)
+                return
+              }
+              sendAutoReply(
+                'Não entendi. Por favor, informe o endereço completo do atendimento (rua, número, bairro e cidade):',
+              )
+              return
+            }
+            scheduleData.address = addr
+            scheduleState = 'vt_confirm'
+            scheduleData.attempts = 0
+            saveScheduleState()
+            sendAutoReply(
+              'Confirme os dados para a visita técnica:\n' +
+                scheduleData.name +
+                '\n' +
+                formatPhonePretty(scheduleData.phone) +
+                '\n' +
+                addr +
+                '\n\nEstá correto? Responda 1 para SIM ou 2 para NÃO.',
+            )
+            return
+          }
+
+          if (scheduleState === 'vt_confirm') {
+            if (trimmed === '1') {
+              let c = null
+              if (scheduleData.client_id) {
+                try {
+                  c = app.findRecordById('clients', scheduleData.client_id)
+                } catch (_) {}
+              }
+              if (!c) {
+                // Cadastro confirmado sem vínculo (endereço informado): cria um
+                // novo cliente com os dados do fluxo, para a OS sair vinculada.
+                try {
+                  c = new Record(app.findCollectionByNameOrId('clients'))
+                  c.set('name', String(scheduleData.name || '').trim() || 'Cliente WhatsApp')
+                  c.set('phone', String(scheduleData.phone || rawPhone).trim())
+                  if (String(scheduleData.address || '').trim()) {
+                    c.set('address', String(scheduleData.address).trim())
+                  }
+                  c.set('status', 'active')
+                  app.save(c)
+                  console.log('[whatsapp] visita técnica: novo cliente criado:', c.id)
+                } catch (err) {
+                  console.log('[whatsapp] visita técnica: falha ao criar cliente:', err)
+                }
+              }
+              if (!c) {
+                clearScheduleState()
+                sendAutoReply(
+                  'Não consegui preparar o agendamento agora. Por favor, tente novamente mais tarde ou digite 1 para falar com um atendente.',
+                )
+                return
+              }
+              scheduleState = 'awaiting_slot'
+              scheduleData.attempts = 0
+              saveScheduleState()
+              sendSlotList()
+              return
+            }
+            if (trimmed === '2') {
+              // Refaz o fluxo: nome completo primeiro.
+              scheduleState = 'vt_name'
+              scheduleData = { order_type: 'visita_tecnica', attempts: 0 }
+              saveScheduleState()
+              sendAutoReply('Sem problemas. ' + VT_ASK_NAME)
+              return
+            }
+            if (bumpAttempts()) {
+              clearScheduleState()
+              sendAutoReply(GIVE_UP_TEXT)
+              return
+            }
+            sendAutoReply('Por favor, responda 1 para SIM ou 2 para NÃO.')
+            return
+          }
+
+          if (scheduleState === 'vt_pick') {
+            // Cliente escolhe o ENDEREÇO (cadastro) que precisa de atendimento.
+            const candidates = Array.isArray(scheduleData.candidate_ids)
+              ? scheduleData.candidate_ids
+              : []
+            const idx = parseInt(trimmed, 10)
+            if (idx >= 1 && idx <= candidates.length) {
+              let c = null
+              try {
+                c = app.findRecordById('clients', candidates[idx - 1])
+              } catch (_) {}
+              if (c) {
+                scheduleState = 'awaiting_slot'
+                scheduleData.client_id = c.id
+                scheduleData.attempts = 0
+                saveScheduleState()
+                sendAutoReply(
+                  'Atendimento no endereço: ' +
+                    (clientFullAddress(c) || 'endereço a confirmar com o técnico') +
+                    '.\nAgora vou te oferecer as datas e horários disponíveis.',
+                )
+                sendSlotList()
+                return
+              }
+            }
+            if (bumpAttempts()) {
+              clearScheduleState()
+              sendAutoReply(GIVE_UP_TEXT)
+              return
+            }
+            sendAutoReply('Responda com o número de um dos endereços da lista acima.')
+            return
+          }
+
           // Estado desconhecido: limpa para não travar a conversa.
           clearScheduleState()
         }
@@ -1228,8 +1529,10 @@ routerAdd(
             )
           }
         } else if (option === '2' || option === '3') {
-          // Opção 2 = orçamento, opção 3 = visita técnica: abre o fluxo
-          // conversacional de agendamento (nome/telefone -> cadastro -> slots).
+          // Opção 2 = orçamento: abre o fluxo de agendamento de orçamento
+          // (nome + telefone -> cadastro -> slots). Opção 3 = visita técnica:
+          // abre o fluxo PRÓPRIO de visita técnica (nome -> telefone ->
+          // cadastro/endereço -> slots com os dois turnos).
           scheduleIntro(option === '2' ? 'orcamento' : 'visita_tecnica')
           sentOk = true
         } else {
