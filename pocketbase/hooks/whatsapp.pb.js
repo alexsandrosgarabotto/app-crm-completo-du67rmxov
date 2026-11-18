@@ -242,6 +242,27 @@ routerAdd(
             (contact.profile && contact.profile.name) || contact.wa_id || '',
           )
           for (const msg of value.messages || []) {
+            const msgType = String((msg && msg.type) || '')
+
+            // Eventos que NÃO são uma mensagem de conteúdo do cliente. A Meta
+            // entrega reactions ("type":"reaction" — ex.: o cliente trocou uma
+            // reação de emoji numa mensagem), mensagens não suportadas
+            // ("unsupported") e eventos de sistema ("system") DENTRO de
+            // value.messages — todos sem text.body. Antes caíam no ramo de
+            // mídia e o bot respondia "Recebi um áudio/mídia..." sem o cliente
+            // ter enviado nada (o "erro de notificação aleatória"). Aqui são
+            // ignorados: nenhuma gravação, nenhuma resposta — o webhook
+            // responde 200 e a Meta não reentrega.
+            if (msgType === 'reaction' || msgType === 'unsupported' || msgType === 'system') {
+              console.log(
+                '[whatsapp] evento ignorado (não é mensagem de conteúdo): tipo=' +
+                  msgType +
+                  ' de ' +
+                  String((msg && msg.from) || ''),
+              )
+              continue
+            }
+
             const text = String(
               (msg.text && msg.text.body) ||
                 msg.caption ||
@@ -252,8 +273,31 @@ routerAdd(
                 '',
             )
             if (!text) {
-              // Mídia sem texto: registra com o marcador em vez de descartar.
               if (!String(msg.from || '')) continue
+              // Mídia REAL (áudio, imagem, vídeo, documento...) sem texto:
+              // registra com o marcador em vez de descartar — recebe a
+              // orientação para reenviar em texto. Sticker também é mídia, mas
+              // reage igual a reaction (muitos clientes mandam de brincadeira):
+              // é ignorado, sem resposta. Tipos desconhecidos/texto vazio
+              // também são ignorados — só mídia de verdade dispara o aviso.
+              const MEDIA_TYPES = {
+                audio: true,
+                image: true,
+                video: true,
+                document: true,
+                location: true,
+                contacts: true,
+                order: true,
+              }
+              if (!MEDIA_TYPES[msgType]) {
+                console.log(
+                  '[whatsapp] evento ignorado (sem texto e sem mídia processável): tipo=' +
+                    msgType +
+                    ' de ' +
+                    String((msg && msg.from) || ''),
+                )
+                continue
+              }
               events.push({
                 phone: String(msg.from || ''),
                 text: MEDIA_NO_TEXT,
@@ -482,7 +526,13 @@ routerAdd(
           } catch (_) {}
         }
 
-        // Registra a mensagem recebida.
+        // Registra a mensagem recebida. Com external_id, o índice UNIQUE
+        // (migração 0025) é a última barreira contra a REENTREGA da Meta: se
+        // duas entregas do mesmo message id correm em paralelo e ambas passam
+        // pela checagem de duplicidade acima (findRecordsByFilter antes do
+        // insert da outra), o segundo app.save falha aqui — a entrega é
+        // então IGNORADA (200, sem resposta ao cliente), e não respondida
+        // duas vezes.
         const messagesCollection = app.findCollectionByNameOrId('whatsapp_messages')
         const inboundRecord = new Record(messagesCollection)
         inboundRecord.set('conversation_id', conversation.id)
@@ -492,7 +542,16 @@ routerAdd(
         if (externalId) {
           inboundRecord.set('external_id', externalId)
         }
-        app.save(inboundRecord)
+        try {
+          app.save(inboundRecord)
+        } catch (dupErr) {
+          console.log(
+            '[whatsapp] mensagem duplicada bloqueada pelo índice UNIQUE (reentrega da Meta), ignorando:',
+            externalId,
+          )
+          results.push({ ok: true, ignored: 'mensagem duplicada (unique index)' })
+          continue
+        }
 
         const nowIso = new Date().toISOString()
         conversation.set('last_message', text)

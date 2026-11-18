@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-18T15:14:04.241Z",
+  "generatedAt": "2026-11-18T15:38:54.646Z",
   "collections": [
     {
       "name": "users",
@@ -1433,7 +1433,7 @@
       ],
       "indexes": [
         "CREATE INDEX idx_wa_msg_conversation ON whatsapp_messages (conversation_id)",
-        "CREATE INDEX idx_wa_msg_external ON whatsapp_messages (external_id)"
+        "CREATE UNIQUE INDEX idx_wa_msg_external_unique ON whatsapp_messages (external_id) WHERE external_id != ''"
       ]
     },
     {
