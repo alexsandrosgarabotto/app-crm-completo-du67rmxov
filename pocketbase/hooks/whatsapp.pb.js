@@ -995,9 +995,22 @@ routerAdd(
           return matches
         }
 
+        // Dedup por id — buscas diferentes podem devolver o mesmo cadastro.
+        const dedupById = (records) => {
+          const out = []
+          const seen = {}
+          for (const c of records || []) {
+            if (!seen[c.id]) {
+              seen[c.id] = true
+              out.push(c)
+            }
+          }
+          return out
+        }
+
         // Busca tolerante de cadastros pelo nome (case-insensitive): cada token
         // (>= 3 letras) do nome digitado precisa existir no nome do cadastro.
-        // O telefone é combinado depois (mesmo DDD + finais, samePhone).
+        // Usada como FALLBACK quando a busca pelo telefone não encontra nada.
         const findClientsByName = (typedName) => {
           const tokens = String(typedName || '')
             .toLowerCase()
@@ -1290,8 +1303,25 @@ routerAdd(
             }
             scheduleData.name = parsed.name
             scheduleData.phone = parsed.phone
-            const phoneMatches = findClientsByPhone(parsed.phone)
-            const matches = phoneMatches.filter((c) => matchesName(c.get('name'), parsed.name))
+            // Prioridade TELEFONE > NOME: cadastro achado pelo telefone é usado
+            // mesmo que o nome digitado difira (o cadastro pode ter razão
+            // social/apelido diferente do nome informado). Só busca pelo nome
+            // quando o telefone não encontra nenhum cadastro.
+            let matches = findClientsByPhone(parsed.phone)
+            if (matches.length === 0) {
+              matches = findClientsByName(parsed.name)
+              console.log(
+                '[whatsapp] agendamento: telefone ' +
+                  parsed.phone +
+                  ' sem cadastro — buscando pelo nome "' +
+                  parsed.name +
+                  '"',
+              )
+            } else if (matches.length > 1) {
+              // Vários com o mesmo telefone: tenta desambiguar pelo nome.
+              const byName = matches.filter((c) => matchesName(c.get('name'), parsed.name))
+              if (byName.length > 0) matches = byName
+            }
             if (matches.length === 1) {
               const c = matches[0]
               scheduleState = 'awaiting_confirm'
@@ -1327,6 +1357,7 @@ routerAdd(
               msg += '\nResponda com o número:'
               sendAutoReply(msg)
             } else {
+              // Nem telefone nem nome localizaram: segue como novo cliente.
               scheduleState = 'awaiting_confirm'
               scheduleData.client_id = ''
               scheduleData.attempts = 0
@@ -1334,7 +1365,9 @@ routerAdd(
               console.log(
                 '[whatsapp] agendamento: nenhum cadastro encontrado para ' +
                   parsed.phone +
-                  ' — seguirá como novo cliente',
+                  ' / "' +
+                  parsed.name +
+                  '" — seguirá como novo cliente',
               )
               sendAutoReply(
                 'Não encontrei cadastro com esse telefone. Vou atender como novo cliente — confirme: ' +
@@ -1634,7 +1667,7 @@ routerAdd(
           }
 
           if (scheduleState === 'vt_phone') {
-            // Telefone: busca cadastros no sistema combinando nome + telefone.
+            // Telefone: busca cadastros no sistema (prioridade telefone > nome).
             const cleaned = trimmed.replace(/\D/g, '')
             if (cleaned.length < 10 || cleaned.length > 13) {
               if (bumpAttempts()) {
@@ -1653,25 +1686,25 @@ routerAdd(
             scheduleData.attempts = 0
             saveScheduleState()
 
-            const nameHits = findClientsByName(scheduleData.name)
-            const combined = nameHits.filter((c) =>
-              samePhone(normalizePhone(c.get('phone')), normalizePhone(phoneDigits)),
-            )
-            // Dedup (por id) — a busca por nome pode devolver o mesmo cadastro.
-            const unique = []
-            const seenIds = {}
-            for (const c of combined) {
-              if (!seenIds[c.id]) {
-                seenIds[c.id] = true
-                unique.push(c)
-              }
+            // Prioridade TELEFONE > NOME (pedido do dono): o telefone é o
+            // identificador do cadastro — o nome digitado pode ser apelido ou
+            // diferir da razão social (ex.: "Ana Paula Silva" vs "ANA
+            // PERFUMARIA"). Achou pelo telefone, usa e IGNORA o nome; só busca
+            // pelo nome quando o telefone não encontra nenhum cadastro.
+            let unique = dedupById(findClientsByPhone(phoneDigits))
+            let buscaBase = 'telefone'
+            if (unique.length === 0) {
+              unique = dedupById(findClientsByName(scheduleData.name))
+              buscaBase = 'nome'
             }
             console.log(
               '[whatsapp] visita técnica: busca por "' +
                 scheduleData.name +
                 '" + ' +
                 phoneDigits +
-                ' => ' +
+                ' (busca por ' +
+                buscaBase +
+                ') => ' +
                 unique.length +
                 ' cadastro(s)',
             )
@@ -1696,8 +1729,9 @@ routerAdd(
               scheduleData.candidate_ids = unique.map((c) => c.id)
               scheduleData.attempts = 0
               saveScheduleState()
+              // Pode ter vindo do telefone (vários cadastros) ou do nome.
               let msg =
-                'Encontrei mais de um cadastro com esse nome. Qual endereço precisa de atendimento?\n'
+                'Encontrei mais de um cadastro com esses dados. Qual endereço precisa de atendimento?\n'
               unique.forEach((c, i) => {
                 const addr = clientFullAddress(c) || 'endereço não informado'
                 msg += i + 1 + ') ' + addr + '\n'
@@ -1706,17 +1740,17 @@ routerAdd(
               sendAutoReply(msg)
               return
             }
-            // Não localizou pelo nome + telefone: pede o endereço para a visita.
+            // Nem telefone nem nome localizaram: pede o endereço para a visita.
             scheduleState = 'vt_address'
             scheduleData.client_id = ''
             scheduleData.attempts = 0
             saveScheduleState()
             console.log(
-              '[whatsapp] visita técnica: cadastro não localizado para ' +
-                scheduleData.name +
-                ' / ' +
+              '[whatsapp] visita técnica: cadastro não localizado (telefone ' +
                 phoneDigits +
-                ' — pedindo endereço',
+                ' e nome "' +
+                scheduleData.name +
+                '" sem resultado) — pedindo endereço',
             )
             sendAutoReply(
               'Não encontrei seu cadastro no sistema. Para agendar a visita, me informe o ENDEREÇO completo do atendimento (rua, número, bairro e cidade):',
