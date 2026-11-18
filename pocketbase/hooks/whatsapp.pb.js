@@ -527,27 +527,43 @@ routerAdd(
         // Estado atual do fluxo (let: os handlers avançam/limpam o estado).
         let scheduleState = String(conversation.get('schedule_state') || '')
         let scheduleData = {}
-        const rawSchedData = conversation.get('schedule_data')
-        // O JSVM (goja) devolve o JSONField como objeto JS NÃO re-serializável:
-        // usá-lo direto e gravá-lo de volta gera "undefined" persistido e os
-        // dados do fluxo (nome, telefone, slots) se perdem entre mensagens —
-        // visto em produção ("busca por undefined"). Reconstruímos SEMPRE um
-        // objeto plano a partir da string JSON.
-        try {
-          const asString =
-            typeof rawSchedData === 'string'
-              ? rawSchedData
-              : rawSchedData && typeof rawSchedData === 'object'
-                ? JSON.stringify(rawSchedData)
-                : ''
-          if (asString && asString.trim() !== '' && asString !== 'undefined') {
+        // O JSVM (goja) devolve o campo JSONField de record.get() como BYTES
+        // crus (array de números), NUNCA como objeto/strling JS. Fazer
+        // JSON.stringify nele gera "[34,123,...]" e JSON.parse devolve um
+        // ARRAY — era exatamente isso que ZERAVA o estado a cada mensagem:
+        // o array era descartado pelo guard !Array.isArray e scheduleData
+        // voltava {}, perdendo name/phone/order_type/address/client_id e a
+        // lista de slots (o cliente ficava preso no loop da lista de
+        // horários). Ler com getString e reconstruir SEMPRE um objeto plano.
+        const readSchedDataAsString = (raw) => {
+          if (raw === undefined || raw === null) return ''
+          if (typeof raw === 'string') return raw
+          if (Array.isArray(raw) && raw.length > 0 && typeof raw[0] === 'number') {
+            try {
+              return String.fromCharCode.apply(null, raw)
+            } catch (_) {
+              return ''
+            }
+          }
+          if (raw && typeof raw === 'object') {
+            try {
+              return JSON.stringify(raw)
+            } catch (_) {
+              return ''
+            }
+          }
+          return ''
+        }
+        const asString = readSchedDataAsString(conversation.get('schedule_data'))
+        if (asString && asString.trim() !== '' && asString.trim() !== 'null') {
+          try {
             const parsed = JSON.parse(asString)
             if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
               scheduleData = parsed
             }
+          } catch (_) {
+            scheduleData = {}
           }
-        } catch (_) {
-          scheduleData = {}
         }
         // Sanitiza valores "undefined"/"null" que gravações antigas corrompidas
         // do JSONField possam ter persistido (visto em produção: nome "undefined").
@@ -556,6 +572,22 @@ routerAdd(
           if (v === undefined || v === null || String(v) === 'undefined' || String(v) === 'null') {
             scheduleData[k] = ''
           }
+        }
+        // Nome de exibição com fallback: NUNCA "undefined" nem vazio em texto.
+        const stateName = () => {
+          const n = String(scheduleData.name || '').trim()
+          if (n && n !== 'undefined' && n !== 'null') return n
+          const c = String(contactName || '').trim()
+          if (c && c !== 'undefined') return c
+          return 'cliente'
+        }
+        // O estado carrega os dados mínimos para criar a OS: sem eles, não dá
+        // para seguir de awaiting_slot — o cliente precisa recomeçar limpo.
+        const scheduleDataComplete = () => {
+          const name = String(scheduleData.name || '').trim()
+          const phone = String(scheduleData.phone || '').trim()
+          const orderType = String(scheduleData.order_type || '').trim()
+          return name !== '' && phone !== '' && orderType !== ''
         }
         const saveScheduleState = () => {
           // Stringify a partir do objeto plano reconstruído acima (nunca do
