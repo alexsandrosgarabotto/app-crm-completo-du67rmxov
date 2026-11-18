@@ -28,6 +28,7 @@ import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
+import { isTecnico, TECNICO_HOME } from '@/lib/roles'
 
 export default function CRMNavigationLayout() {
   const { user, signOut } = useAuth()
@@ -59,6 +60,11 @@ export default function CRMNavigationLayout() {
       : []),
   ]
 
+  // Perfil "Somente Ordens de Serviço": o menu inteiro se resume ao módulo de OS.
+  const visibleNavItems = isTecnico(user)
+    ? navItems.filter((item) => item.path === TECNICO_HOME)
+    : navItems
+
   const getInitials = (name?: string) => {
     if (!name) return 'U'
     const parts = name.trim().split(' ')
@@ -84,7 +90,7 @@ export default function CRMNavigationLayout() {
           <p className="px-3 text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
             Menu Principal
           </p>
-          {navItems.map((item) => {
+          {visibleNavItems.map((item) => {
             const Icon = item.icon
             return (
               <NavLink
@@ -131,6 +137,13 @@ export default function CRMNavigationLayout() {
                       className="bg-amber-100 text-amber-800 text-[10px] px-1.5 py-0 font-normal"
                     >
                       <ShieldCheck className="h-3 w-3 mr-0.5 inline" /> Dono
+                    </Badge>
+                  ) : user?.role === 'tecnico' ? (
+                    <Badge
+                      variant="secondary"
+                      className="bg-sky-100 text-sky-800 text-[10px] px-1.5 py-0 font-normal"
+                    >
+                      <Wrench className="h-3 w-3 mr-0.5 inline" /> Somente OS
                     </Badge>
                   ) : (
                     <Badge
@@ -200,7 +213,7 @@ export default function CRMNavigationLayout() {
               </div>
 
               <div className="p-4 flex-1 space-y-1 overflow-y-auto">
-                {navItems.map((item) => {
+                {visibleNavItems.map((item) => {
                   const Icon = item.icon
                   return (
                     <NavLink

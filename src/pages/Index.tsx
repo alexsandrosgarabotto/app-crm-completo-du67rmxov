@@ -1,6 +1,7 @@
 import React from 'react'
 import { Navigate } from 'react-router-dom'
 import { useAuth } from '@/hooks/use-auth'
+import { isTecnico, TECNICO_HOME } from '@/lib/roles'
 
 export default function IndexPage() {
   const { user, loading } = useAuth()
@@ -14,7 +15,7 @@ export default function IndexPage() {
   }
 
   if (user) {
-    return <Navigate to="/dashboard" replace />
+    return <Navigate to={isTecnico(user) ? TECNICO_HOME : '/dashboard'} replace />
   }
 
   return <Navigate to="/login" replace />

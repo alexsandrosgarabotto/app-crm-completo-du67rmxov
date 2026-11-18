@@ -1,5 +1,5 @@
 import pb from '@/lib/pocketbase/client'
-import type { CompanySettings, User } from '@/types/crm'
+import type { CompanySettings, User, UserRole } from '@/types/crm'
 
 export const companyService = {
   async getSettings(): Promise<CompanySettings | null> {
@@ -30,7 +30,7 @@ export const companyService = {
   async inviteOrAddMember(data: {
     name: string
     email: string
-    role: 'owner' | 'seller'
+    role: UserRole
     phone?: string
   }): Promise<User> {
     // Cria o usuário com uma senha temporária padrão que pode ser resetada
@@ -54,7 +54,7 @@ export const companyService = {
     return created
   },
 
-  async updateUserRole(id: string, role: 'owner' | 'seller'): Promise<User> {
+  async updateUserRole(id: string, role: UserRole): Promise<User> {
     return await pb.collection('users').update<User>(id, { role })
   },
 

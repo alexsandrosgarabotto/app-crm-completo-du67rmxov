@@ -15,6 +15,7 @@ import {
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Building2, AlertCircle, CheckCircle2, Lock, Mail, User } from 'lucide-react'
+import { isTecnico, TECNICO_HOME } from '@/lib/roles'
 
 export default function LoginPage() {
   const { signIn, signUp, requestPasswordReset } = useAuth()
@@ -32,7 +33,8 @@ export default function LoginPage() {
   const [name, setName] = useState('')
   const [role, setRole] = useState<'owner' | 'seller'>('seller')
 
-  const from = (location.state as any)?.from?.pathname || '/dashboard'
+  const resolvePostLoginPath = (user?: { role?: string } | null) =>
+    isTecnico(user as any) ? TECNICO_HOME : (location.state as any)?.from?.pathname || '/dashboard'
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -41,11 +43,11 @@ export default function LoginPage() {
     setLoading(true)
 
     try {
-      const { error } = await signIn(email.trim(), password)
+      const { user: loggedUser, error } = await signIn(email.trim(), password)
       if (error) {
         setErrorMessage('E-mail ou senha inválidos. Verifique suas credenciais.')
       } else {
-        navigate(from, { replace: true })
+        navigate(resolvePostLoginPath(loggedUser), { replace: true })
       }
     } catch {
       setErrorMessage('Ocorreu um erro ao tentar entrar. Tente novamente.')

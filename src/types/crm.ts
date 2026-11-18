@@ -1,4 +1,11 @@
-export type UserRole = 'owner' | 'seller'
+export type UserRole = 'owner' | 'seller' | 'tecnico'
+
+/** Rótulos de papel exibidos na UI (Equipe, menu, OS). */
+export const USER_ROLE_LABELS: Record<UserRole, string> = {
+  owner: 'Dono (Acesso Total)',
+  seller: 'Vendedor (Seus Dados)',
+  tecnico: 'Somente Ordens de Serviço',
+}
 
 export interface User {
   id: string

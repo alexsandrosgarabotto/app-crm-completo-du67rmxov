@@ -1,6 +1,7 @@
 import React from 'react'
 import { Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '@/hooks/use-auth'
+import { canAccessRoute, TECNICO_HOME } from '@/lib/roles'
 
 interface ProtectedRouteProps {
   children: React.ReactNode
@@ -27,6 +28,12 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
 
   if (!user) {
     return <Navigate to="/login" state={{ from: location }} replace />
+  }
+
+  // Perfil "Somente Ordens de Serviço": qualquer rota fora de /ordens-servico
+  // cai no redirecionamento para o módulo único dele.
+  if (!canAccessRoute(user, location.pathname)) {
+    return <Navigate to={TECNICO_HOME} replace />
   }
 
   if (requireOwner && user.role !== 'owner') {

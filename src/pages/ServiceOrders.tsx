@@ -1049,6 +1049,7 @@ export default function ServiceOrdersPage() {
                   {users.map((u) => (
                     <option key={u.id} value={u.id}>
                       {u.name}
+                      {u.role === 'tecnico' ? ' (Somente OS)' : u.role === 'owner' ? ' (Dono)' : ''}
                     </option>
                   ))}
                 </select>

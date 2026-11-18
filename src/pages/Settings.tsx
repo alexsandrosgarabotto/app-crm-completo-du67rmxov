@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { useAuth } from '@/hooks/use-auth'
 import { companyService } from '@/services/company'
 import { whatsappTemplatesService } from '@/services/whatsappTemplates'
-import type { CompanySettings, User, WhatsAppTemplateKey } from '@/types/crm'
+import type { CompanySettings, User, UserRole, WhatsAppTemplateKey } from '@/types/crm'
 import {
   Building2,
   Users,
@@ -15,6 +15,7 @@ import {
   Trash2,
   MessageSquareText,
   Bot,
+  Wrench,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -214,7 +215,7 @@ export default function SettingsPage() {
   const [inviteName, setInviteName] = useState('')
   const [inviteEmail, setInviteEmail] = useState('')
   const [invitePhone, setInvitePhone] = useState('')
-  const [inviteRole, setInviteRole] = useState<'owner' | 'seller'>('seller')
+  const [inviteRole, setInviteRole] = useState<UserRole>('seller')
   const [submittingInvite, setSubmittingInvite] = useState(false)
 
   useEffect(() => {
@@ -337,6 +338,20 @@ export default function SettingsPage() {
     }
   }
 
+  const ROLE_LABELS: Record<UserRole, string> = {
+    owner: 'Dono',
+    seller: 'Vendedor',
+    tecnico: 'Somente Ordens de Serviço',
+  }
+
+  const ROLE_CYCLE: Record<UserRole, UserRole> = {
+    owner: 'seller',
+    seller: 'tecnico',
+    tecnico: 'owner',
+  }
+
+  const roleAfterToggle = (member: User): UserRole => ROLE_CYCLE[member.role] ?? 'owner'
+
   const handleToggleRole = async (member: User) => {
     if (member.id === user?.id) {
       toast({
@@ -346,13 +361,13 @@ export default function SettingsPage() {
       })
       return
     }
-    const nextRole = member.role === 'owner' ? 'seller' : 'owner'
+    const nextRole = roleAfterToggle(member)
     try {
       setTeam((prev) => prev.map((m) => (m.id === member.id ? { ...m, role: nextRole } : m)))
       await companyService.updateUserRole(member.id, nextRole)
       toast({
         title: 'Papel atualizado',
-        description: `${member.name} agora é ${nextRole === 'owner' ? 'Dono' : 'Vendedor'}.`,
+        description: `${member.name} agora é ${ROLE_LABELS[nextRole]}.`,
       })
     } catch {
       setTeam((prev) => prev.map((m) => (m.id === member.id ? { ...m, role: member.role } : m)))
@@ -565,6 +580,10 @@ export default function SettingsPage() {
                           <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100 border-0 text-xs shrink-0">
                             <ShieldCheck className="h-3.5 w-3.5 mr-1 inline" /> Dono
                           </Badge>
+                        ) : member.role === 'tecnico' ? (
+                          <Badge className="bg-sky-100 text-sky-800 hover:bg-sky-100 border-0 text-xs shrink-0">
+                            <Wrench className="h-3.5 w-3.5 mr-1 inline" /> Somente OS
+                          </Badge>
                         ) : (
                           <Badge className="bg-slate-100 text-slate-700 hover:bg-slate-100 border-0 text-xs shrink-0">
                             <UserCheck className="h-3.5 w-3.5 mr-1 inline" /> Vendedor
@@ -579,7 +598,7 @@ export default function SettingsPage() {
                             className="text-xs text-blue-600 h-11"
                             onClick={() => handleToggleRole(member)}
                           >
-                            Mudar para {member.role === 'owner' ? 'Vendedor' : 'Dono'}
+                            Mudar para {ROLE_LABELS[roleAfterToggle(member)]}
                           </Button>
                           <Button
                             variant="ghost"
@@ -641,6 +660,11 @@ export default function SettingsPage() {
                                 <ShieldCheck className="h-3.5 w-3.5 mr-1 inline" /> Dono (Acesso
                                 Total)
                               </Badge>
+                            ) : member.role === 'tecnico' ? (
+                              <Badge className="bg-sky-100 text-sky-800 hover:bg-sky-100 border-0 text-xs">
+                                <Wrench className="h-3.5 w-3.5 mr-1 inline" /> Somente Ordens de
+                                Serviço
+                              </Badge>
                             ) : (
                               <Badge className="bg-slate-100 text-slate-700 hover:bg-slate-100 border-0 text-xs">
                                 <UserCheck className="h-3.5 w-3.5 mr-1 inline" /> Vendedor (Seus
@@ -658,7 +682,7 @@ export default function SettingsPage() {
                                     className="text-xs text-blue-600 h-11"
                                     onClick={() => handleToggleRole(member)}
                                   >
-                                    Mudar para {member.role === 'owner' ? 'Vendedor' : 'Dono'}
+                                    Mudar para {ROLE_LABELS[roleAfterToggle(member)]}
                                   </Button>
                                   <Button
                                     variant="ghost"
@@ -746,6 +770,9 @@ export default function SettingsPage() {
               >
                 <option value="seller">Vendedor (visualiza apenas seus clientes e vendas)</option>
                 <option value="owner">Dono / Gestor (visualiza tudo e gerencia equipe)</option>
+                <option value="tecnico">
+                  Somente Ordens de Serviço (acessa apenas o módulo de OS)
+                </option>
               </select>
             </div>
 
