@@ -1633,6 +1633,22 @@ routerAdd(
         if (!autoReplyAllowed) {
           // Modo validação: remetente fora da lista de teste — nada sai.
           // A mensagem já foi gravada; fica para atendimento manual.
+        } else if (scheduleState && isGreeting) {
+          // Cumprimento no meio do fluxo: Reinicia o atendimento do zero —
+          // limpa o estado (inclusive listas de horários antigas gravadas
+          // antes de um ajuste no fluxo) e manda saudação + menu de novo.
+          clearScheduleState()
+          try {
+            sendGreetingAndMenu()
+            sentOk = true
+            console.log(
+              '[whatsapp] cumprimento reiniciou o fluxo de agendamento — estado limpo, menu reenviado:',
+              trimmed,
+            )
+          } catch (sendErr) {
+            sendError = String(sendErr)
+            console.log('[whatsapp] aviso: saudação/menu não enviados após reinício:', sendErr)
+          }
         } else if (scheduleState) {
           // Cliente no meio do fluxo de agendamento: qualquer mensagem é
           // processada pelo fluxo (inclusive "1"/"2" como resposta de
