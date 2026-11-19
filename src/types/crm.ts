@@ -104,6 +104,11 @@ export interface Invoice {
   category?: string
   created_by?: string
   notes?: string
+  payment_provider?: string
+  payment_link_url?: string
+  payment_intent_id?: string
+  payment_status?: string
+  paid_at?: string
   created: string
   updated: string
   expand?: {

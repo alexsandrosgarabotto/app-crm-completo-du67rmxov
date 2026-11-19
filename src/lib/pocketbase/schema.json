@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-19T22:59:51.684Z",
+  "generatedAt": "2026-11-19T23:26:14.374Z",
   "collections": [
     {
       "name": "users",
@@ -1876,9 +1876,24 @@
           "required": false,
           "system": false,
           "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "event_id",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "processed",
+          "type": "bool",
+          "required": false,
+          "system": false
         }
       ],
-      "indexes": ["CREATE INDEX idx_stripe_events_type ON stripe_webhook_events (event_type)"]
+      "indexes": [
+        "CREATE INDEX idx_stripe_events_type ON stripe_webhook_events (event_type)",
+        "CREATE UNIQUE INDEX idx_stripe_events_event ON stripe_webhook_events (event_id) WHERE event_id != ''"
+      ]
     },
     {
       "name": "app_config",
