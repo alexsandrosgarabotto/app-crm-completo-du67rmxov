@@ -16,6 +16,7 @@ import {
   MessageSquareText,
   Bot,
   Wrench,
+  UserCog,
   KeyRound,
   Eye,
   EyeOff,
@@ -45,6 +46,7 @@ import { TechniciansCard, ScheduleReservationsCard } from '@/components/settings
 import { InstallAppCard } from '@/components/settings/InstallAppCard'
 import { ChangePasswordCard } from '@/components/settings/ChangePasswordCard'
 import { ResetMemberPasswordDialog } from '@/components/settings/ResetMemberPasswordDialog'
+import { EditTeamMemberDialog } from '@/components/settings/EditTeamMemberDialog'
 
 const templateMeta: Record<WhatsAppTemplateKey, { title: string; hint: string }> = {
   greeting: {
@@ -228,6 +230,7 @@ export default function SettingsPage() {
   const [inviteRole, setInviteRole] = useState<UserRole>('seller')
   const [submittingInvite, setSubmittingInvite] = useState(false)
   const [resetTarget, setResetTarget] = useState<User | null>(null)
+  const [editTarget, setEditTarget] = useState<User | null>(null)
 
   useEffect(() => {
     loadAll()
@@ -416,6 +419,10 @@ export default function SettingsPage() {
         variant: 'destructive',
       })
     }
+  }
+
+  const handleMemberUpdated = (updated: User) => {
+    setTeam((prev) => prev.map((m) => (m.id === updated.id ? updated : m)))
   }
 
   const handleDeleteMember = async (member: User) => {
@@ -636,6 +643,14 @@ export default function SettingsPage() {
                             variant="ghost"
                             size="sm"
                             className="text-xs text-blue-600 h-11"
+                            onClick={() => setEditTarget(member)}
+                          >
+                            <UserCog className="h-3.5 w-3.5 mr-1" /> Editar
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-xs text-blue-600 h-11"
                             onClick={() => handleToggleRole(member)}
                           >
                             Mudar para {ROLE_LABELS[roleAfterToggle(member)]}
@@ -724,6 +739,14 @@ export default function SettingsPage() {
                             <div className="flex items-center justify-end gap-2">
                               {member.id !== user?.id && (
                                 <>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="text-xs text-blue-600 h-11"
+                                    onClick={() => setEditTarget(member)}
+                                  >
+                                    <UserCog className="h-3.5 w-3.5 mr-1" /> Editar
+                                  </Button>
                                   <Button
                                     variant="ghost"
                                     size="sm"
@@ -906,6 +929,12 @@ export default function SettingsPage() {
         member={resetTarget}
         onClose={() => setResetTarget(null)}
         onSaved={() => setResetTarget(null)}
+      />
+
+      <EditTeamMemberDialog
+        member={editTarget}
+        onClose={() => setEditTarget(null)}
+        onSaved={handleMemberUpdated}
       />
     </div>
   )

@@ -57,6 +57,18 @@ export const companyService = {
     })
   },
 
+  /** Edita nome, e-mail e telefone de um membro da equipe (ação do dono). */
+  async updateTeamMember(
+    id: string,
+    data: { name: string; email: string; phone?: string },
+  ): Promise<User> {
+    return await pb.collection('users').update<User>(id, {
+      name: data.name,
+      email: data.email,
+      phone: data.phone || '',
+    })
+  },
+
   /** Troca a senha do usuário autenticado (valida a senha atual no backend). */
   async changeMyPassword(oldPassword: string, password: string): Promise<void> {
     const id = pb.authStore.record?.id
