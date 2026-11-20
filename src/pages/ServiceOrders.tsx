@@ -983,7 +983,6 @@ export default function ServiceOrdersPage() {
                     raw: client,
                   }))}
                   placeholder="Digite 3+ letras do nome ou telefone..."
-                  required
                 />
                 <p className="text-[11px] text-slate-400">
                   Digite ao menos 3 letras (nome ou telefone) e escolha o cliente do cadastro.
