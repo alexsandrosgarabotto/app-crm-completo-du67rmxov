@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-20T11:20:28.768Z",
+  "generatedAt": "2026-11-20T13:58:43.945Z",
   "collections": [
     {
       "name": "users",
@@ -39,17 +39,17 @@
           "autodateTriggers": ["onCreate", "onUpdate"]
         },
         {
+          "name": "phone",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
           "name": "role",
           "type": "select",
           "required": false,
           "system": false,
           "selectValues": ["owner", "seller", "tecnico"]
-        },
-        {
-          "name": "phone",
-          "type": "text",
-          "required": false,
-          "system": false
         }
       ],
       "indexes": [
