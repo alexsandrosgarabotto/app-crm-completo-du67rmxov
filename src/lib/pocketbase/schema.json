@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-20T18:01:21.853Z",
+  "generatedAt": "2026-11-20T18:45:21.813Z",
   "collections": [
     {
       "name": "users",
@@ -1677,7 +1677,8 @@
             "horarios",
             "validacao_apenas",
             "validacao_numero",
-            "os_number_base"
+            "os_number_base",
+            "gestor_notify_number"
           ]
         },
         {
