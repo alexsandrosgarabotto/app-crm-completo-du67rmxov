@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-20T18:45:21.813Z",
+  "generatedAt": "2026-11-20T21:38:36.842Z",
   "collections": [
     {
       "name": "users",
@@ -1642,6 +1642,12 @@
         },
         {
           "name": "scheduled_time",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "relatorio_tecnico",
           "type": "text",
           "required": false,
           "system": false
