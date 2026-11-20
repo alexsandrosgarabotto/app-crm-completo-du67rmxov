@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-20T01:44:04.217Z",
+  "generatedAt": "2026-11-20T11:13:24.038Z",
   "collections": [
     {
       "name": "users",
@@ -1676,7 +1676,8 @@
             "meta_access_token",
             "horarios",
             "validacao_apenas",
-            "validacao_numero"
+            "validacao_numero",
+            "os_number_base"
           ]
         },
         {

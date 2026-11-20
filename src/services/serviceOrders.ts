@@ -98,15 +98,33 @@ export const serviceOrdersService = {
     await pb.collection('service_orders').delete(id)
   },
 
-  /** Gera o próximo número sequencial no formato OS-0001 (com base no total criado). */
+  /**
+   * Gera o próximo número sequencial da OS: maior OS-NNNN existente + 1, com
+   * PISO na base 150 — a sequência começa em OS-0150 (e o hook backend
+   * aplica a MESMA regra, inclusive para o bot do WhatsApp). OS antigas
+   * (ex.: OS-0001) continuam válidas; nunca há colisão com elas.
+   */
   async nextNumber(): Promise<string> {
     try {
-      const last = await pb.collection('service_orders').getList<ServiceOrder>(1, 1, {
-        sort: '-created',
-      })
-      const total = last.totalItems || 0
-      const seq = String(total + 1).padStart(4, '0')
-      return `OS-${seq}`
+      const base = 150
+      let maxSeq = base - 1
+      let page = 1
+      while (true) {
+        const res = await pb.collection('service_orders').getList<ServiceOrder>(page, 500, {
+          filter: "number != ''",
+          sort: '-created',
+        })
+        for (const order of res.items) {
+          const m = /(\d+)$/.exec(order.number || '')
+          if (m) {
+            const parsed = parseInt(m[1], 10)
+            if (!isNaN(parsed) && parsed > maxSeq) maxSeq = parsed
+          }
+        }
+        if (page * 500 >= res.totalItems) break
+        page++
+      }
+      return `OS-${String(maxSeq + 1).padStart(4, '0')}`
     } catch {
       const fallback = Date.now().toString().slice(-6)
       return `OS-${fallback}`

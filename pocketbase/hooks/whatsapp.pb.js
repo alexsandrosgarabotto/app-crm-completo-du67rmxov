@@ -920,9 +920,25 @@ routerAdd(
           return slots
         }
 
-        // Próximo número sequencial de OS: maior OS-NNNN existente + 1.
+        // Próximo número sequencial de OS: maior OS-NNNN existente + 1, com
+        // PISO na base configurada (key 'os_number_base' em
+        // whatsapp_templates, padrão 150) — a sequência começa em OS-0150.
         const nextOrderNumber = () => {
-          let maxSeq = 0
+          let base = 150
+          try {
+            const baseCfg = app.findRecordsByFilter(
+              'whatsapp_templates',
+              "key = 'os_number_base'",
+              '',
+              1,
+              0,
+            )
+            if (baseCfg.length > 0) {
+              const parsed = parseInt(String(baseCfg[0].get('body') || ''), 10)
+              if (!isNaN(parsed) && parsed > 0) base = parsed
+            }
+          } catch (_) {}
+          let maxSeq = base - 1
           let page = 0
           while (true) {
             const batch = app.findRecordsByFilter(

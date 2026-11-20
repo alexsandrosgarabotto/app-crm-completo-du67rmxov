@@ -395,7 +395,48 @@ onRecordCreate((e) => {
   const app = e.app
   const order = e.record
 
+  // --- Numeração da OS (base 150) ------------------------------------------
+  // Fonte ÚNICA do número: aplicada em TODA criação (manual pelo CRM ou pelo
+  // bot do WhatsApp). Regra: maior sufixo numérico existente + 1, com PISO na
+  // base configurada (key 'os_number_base' em whatsapp_templates, padrão 150).
+  // Assim a OS-0001 existente não quebra e a próxima OS sai OS-0150, depois
+  // OS-0151... Falha aqui NÃO derruba a criação: o número antigo é mantido.
+  const nextOrderNumber = () => {
+    let base = 150
+    try {
+      const cfg = app.findRecordsByFilter('whatsapp_templates', "key = 'os_number_base'", '', 1, 0)
+      if (cfg.length > 0) {
+        const parsed = parseInt(String(cfg[0].get('body') || ''), 10)
+        if (!isNaN(parsed) && parsed > 0) base = parsed
+      }
+    } catch (_) {}
+    let maxSeq = base - 1
+    let page = 0
+    while (true) {
+      const batch = app.findRecordsByFilter(
+        'service_orders',
+        "number != ''",
+        '-created',
+        500,
+        page * 500,
+      )
+      for (const record of batch) {
+        const m = /(\d+)$/.exec(String(record.get('number') || ''))
+        if (m && parseInt(m[1], 10) > maxSeq) maxSeq = parseInt(m[1], 10)
+      }
+      if (batch.length < 500) break
+      page++
+    }
+    return 'OS-' + String(maxSeq + 1).padStart(4, '0')
+  }
+  // O número só é gerado quando a OS nova não trouxe um (edição/importação
+  // nunca renumera; criação sem número recebe o próximo da sequência).
+  if (String(order.get('number') || '') === '') {
+    order.set('number', nextOrderNumber())
+  }
+
   try {
+    // Aviso de criação (canal Meta/conector, regras de validação e 24h).
     const readConfig = (key) => {
       let value = ''
       try {
