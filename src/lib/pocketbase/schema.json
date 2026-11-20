@@ -43,7 +43,7 @@
           "type": "select",
           "required": false,
           "system": false,
-          "selectValues": ["owner", "seller"]
+          "selectValues": ["owner", "seller", "tecnico"]
         },
         {
           "name": "phone",
