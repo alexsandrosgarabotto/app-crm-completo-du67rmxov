@@ -68,6 +68,8 @@ import { parseAgendamento } from '@/lib/agendaUtils'
 import { SignaturePad } from '@/components/serviceOrders/SignaturePad'
 import { PhotoReport } from '@/components/serviceOrders/PhotoReport'
 import { ServiceOrderClientData } from '@/components/serviceOrders/ServiceOrderClientData'
+import { SearchablePicker } from '@/components/serviceOrders/SearchablePicker'
+import { ServiceOrderPdfButton } from '@/components/serviceOrders/ServiceOrderPdf'
 
 const statusBadgeClasses: Record<ServiceOrderStatus, string> = {
   aberta: 'bg-blue-100 text-blue-800 hover:bg-blue-100 border-0',
@@ -939,9 +941,26 @@ export default function ServiceOrdersPage() {
       <Dialog open={formOpen} onOpenChange={setFormOpen}>
         <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>
-              {form.id ? `Editar ${form.number || 'Ordem'}` : 'Nova Ordem de Serviço'}
-            </DialogTitle>
+            <div className="flex items-start justify-between gap-2">
+              <DialogTitle>
+                {form.id ? `Editar ${form.number || 'Ordem'}` : 'Nova Ordem de Serviço'}
+              </DialogTitle>
+              {form.id && editingOrder && (
+                <ServiceOrderPdfButton
+                  order={editingOrder}
+                  clientName={getClientName(editingOrder)}
+                  clientPhone={editingClient?.phone || editingOrder.client_phone || undefined}
+                  clientAddress={editingClient?.address || editingOrder.client_address || undefined}
+                  clientCity={editingClient?.city || undefined}
+                  clientState={editingClient?.state || undefined}
+                  clientDocument={editingClient?.document || undefined}
+                  technicianName={
+                    editingOrder.expand?.responsible_id?.name ||
+                    users.find((u) => u.id === editingOrder.responsible_id)?.name
+                  }
+                />
+              )}
+            </div>
             <DialogDescription>
               Vincule a OS a um cliente e componha os itens com produtos e/ou serviços do cadastro.
               Ao finalizar, o estoque é baixado e a conta a receber é gerada automaticamente.
@@ -952,19 +971,23 @@ export default function ServiceOrdersPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
                 <Label>Cliente *</Label>
-                <select
+                <SearchablePicker
                   value={form.client_id}
-                  onChange={(e) => setForm((prev) => ({ ...prev, client_id: e.target.value }))}
-                  className="w-full flex h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs"
+                  onChange={(opcao) =>
+                    setForm((prev) => ({ ...prev, client_id: opcao ? opcao.value : '' }))
+                  }
+                  options={clients.map((client) => ({
+                    value: client.id,
+                    label: client.name,
+                    description: client.phone || undefined,
+                    raw: client,
+                  }))}
+                  placeholder="Digite 3+ letras do nome ou telefone..."
                   required
-                >
-                  <option value="">Selecione o cliente</option>
-                  {clients.map((client) => (
-                    <option key={client.id} value={client.id}>
-                      {client.name}
-                    </option>
-                  ))}
-                </select>
+                />
+                <p className="text-[11px] text-slate-400">
+                  Digite ao menos 3 letras (nome ou telefone) e escolha o cliente do cadastro.
+                </p>
               </div>
               <div className="space-y-1.5">
                 <Label>Status</Label>
@@ -1282,34 +1305,31 @@ export default function ServiceOrdersPage() {
                   </div>
                   <div className="col-span-12 sm:col-span-4 space-y-1">
                     <Label className="text-[11px] text-slate-500">
-                      {item.item_type === 'product' ? 'Produto' : 'Serviço'}
+                      {item.item_type === 'product' ? 'Produto (estoque)' : 'Serviço (catálogo)'}
                     </Label>
-                    <select
+                    <SearchablePicker
                       value={item.product_id || item.service_id || ''}
-                      onChange={(e) => pickCatalogItem(index, e.target.value)}
-                      className="w-full flex h-9 rounded-md border border-input bg-background px-2 py-1 text-sm shadow-xs"
-                    >
-                      <option value="">Selecione...</option>
-                      {item.item_type === 'product'
-                        ? products.map((p) => (
-                            <option key={p.id} value={p.id}>
-                              {p.name} —{' '}
-                              {(p.sale_price || 0).toLocaleString('pt-BR', {
+                      onChange={(opcao) => pickCatalogItem(index, opcao ? opcao.value : '')}
+                      options={
+                        item.item_type === 'product'
+                          ? products.map((p) => ({
+                              value: p.id,
+                              label: p.name,
+                              description: `Saldo: ${p.stock_quantity ?? 0} · ${(p.sale_price || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`,
+                              raw: p,
+                            }))
+                          : services.map((s) => ({
+                              value: s.id,
+                              label: s.name,
+                              description: (s.price || 0).toLocaleString('pt-BR', {
                                 style: 'currency',
                                 currency: 'BRL',
-                              })}
-                            </option>
-                          ))
-                        : services.map((s) => (
-                            <option key={s.id} value={s.id}>
-                              {s.name} —{' '}
-                              {(s.price || 0).toLocaleString('pt-BR', {
-                                style: 'currency',
-                                currency: 'BRL',
-                              })}
-                            </option>
-                          ))}
-                    </select>
+                              }),
+                              raw: s,
+                            }))
+                      }
+                      placeholder="Digite 3+ letras para buscar..."
+                    />
                   </div>
                   <div className="col-span-3 sm:col-span-1 space-y-1">
                     <Label className="text-[11px] text-slate-500">Qtd.</Label>
