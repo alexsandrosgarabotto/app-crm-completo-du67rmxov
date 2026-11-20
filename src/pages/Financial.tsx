@@ -6,7 +6,6 @@ import { clientsService } from '@/services/clients'
 import { dealsService } from '@/services/deals'
 import { fixedCostsService } from '@/services/fixedCosts'
 import { cashMovementsService } from '@/services/cashMovements'
-import { stripeBillingService } from '@/services/stripe'
 import CashControlView from '@/components/CashControlView'
 import type {
   Invoice,
@@ -36,7 +35,6 @@ import {
   SendHorizontal,
   TrendingDown,
   Users2,
-  CreditCard,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -89,9 +87,6 @@ export default function FinancialPage() {
   const [editingCost, setEditingCost] = useState<FixedCost | null>(null)
   const [submittingCost, setSubmittingCost] = useState(false)
   const [launchingCostId, setLaunchingCostId] = useState<string | null>(null)
-
-  // Cobrança Stripe: id da fatura em processamento
-  const [chargingId, setChargingId] = useState<string | null>(null)
 
   // Form Custo Fixo State
   const [costFormName, setCostFormName] = useState('')
@@ -331,38 +326,6 @@ export default function FinancialPage() {
         description: 'Não foi possível excluir a movimentação.',
         variant: 'destructive',
       })
-    }
-  }
-
-  const handleCobrar = async (inv: Invoice) => {
-    setChargingId(inv.id)
-    try {
-      const res = await stripeBillingService.cobrar(inv.id)
-      if (!res.ok) {
-        toast({
-          title: 'Não foi possível cobrar',
-          description: res.error || 'Falha ao gerar o link de pagamento.',
-          variant: 'destructive',
-        })
-        return
-      }
-      // Atualiza a fatura com o status da cobrança (payment_link_url preenchido)
-      const refreshed = await invoicesService.getAll()
-      setInvoices(refreshed)
-      toast({
-        title: res.whatsapp_sent ? 'Cobrança enviada!' : 'Cobrança criada',
-        description: res.whatsapp_sent
-          ? 'Link de pagamento enviado ao cliente por WhatsApp (Pix, boleto ou cartão).'
-          : `Link gerado, mas o WhatsApp não saiu: ${res.whatsapp_detail || 'verifique o número do cliente.'}`,
-      })
-    } catch (err: any) {
-      toast({
-        title: 'Erro ao cobrar',
-        description: err.message || 'Falha na integração Stripe.',
-        variant: 'destructive',
-      })
-    } finally {
-      setChargingId(null)
     }
   }
 
@@ -1194,11 +1157,6 @@ export default function FinancialPage() {
                                 Pago em {inv.paid_date}
                               </div>
                             )}
-                            {inv.payment_link_url && inv.status !== 'paid' && (
-                              <div className="text-[10px] text-indigo-600 font-medium mt-0.5">
-                                Cobrança Stripe enviada
-                              </div>
-                            )}
                           </td>
                           <td className="py-3.5 px-4">
                             <span
@@ -1228,34 +1186,6 @@ export default function FinancialPage() {
                           </td>
                           <td className="py-3.5 px-4 text-right">
                             <div className="flex items-center justify-end gap-1">
-                              {inv.type === 'receivable' &&
-                                inv.status === 'pending' &&
-                                !inv.payment_link_url && (
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    disabled={chargingId === inv.id}
-                                    onClick={() => handleCobrar(inv)}
-                                    className="h-7 text-[11px] text-indigo-700 hover:bg-indigo-50 border-indigo-200"
-                                    title="Cobrar via Stripe (Pix, boleto ou cartão) e enviar o link por WhatsApp"
-                                  >
-                                    <CreditCard className="h-3 w-3 mr-1" />
-                                    {chargingId === inv.id ? 'Cobrando...' : 'Cobrar'}
-                                  </Button>
-                                )}
-                              {inv.payment_link_url && (
-                                <a
-                                  href={inv.payment_link_url}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="text-[10px] text-indigo-600 hover:text-indigo-800 underline max-w-28 truncate"
-                                  title={inv.payment_link_url}
-                                >
-                                  {inv.payment_status === 'paid'
-                                    ? 'Pago via Stripe'
-                                    : inv.payment_link_url}
-                                </a>
-                              )}
                               <Button
                                 variant="ghost"
                                 size="icon"
