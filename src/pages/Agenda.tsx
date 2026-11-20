@@ -9,12 +9,21 @@ import {
   Phone,
   Wrench,
   Cake,
+  Plus,
+  Trash2,
+  Loader2,
 } from 'lucide-react'
 import pb from '@/lib/pocketbase/client'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import {
+  ReservationCreateDialog,
+  ReservationDeleteConfirm,
+} from '@/components/agenda/ReservationDialogs'
+import { isOwner } from '@/lib/roles'
+import { useAuth } from '@/hooks/use-auth'
 import { cn } from '@/lib/utils'
 import { serviceOrderStatusLabels, serviceOrdersService } from '@/services/serviceOrders'
 import { scheduleReservationsService, techniciansService } from '@/services/technicians'
@@ -46,10 +55,11 @@ const MONTHS = [
   'Dezembro',
 ]
 
-const pad2 = (n: number) => String(n).padStart(2, '0')
-
 export default function AgendaPage() {
   const navigate = useNavigate()
+  const { user } = useAuth()
+  // A reserva de agenda é coisa de dono: técnico "Somente OS" e vendedor só veem.
+  const canManageReservations = isOwner(user)
   const today = useMemo(() => new Date(), [])
   const [viewYear, setViewYear] = useState(today.getFullYear())
   const [viewMonth, setViewMonth] = useState(today.getMonth()) // 0-11
@@ -60,6 +70,11 @@ export default function AgendaPage() {
   const [technicians, setTechnicians] = useState<Technician[]>([])
   const [holidays, setHolidays] = useState<Holiday[]>([])
   const [loading, setLoading] = useState(true)
+
+  const [createOpen, setCreateOpen] = useState(false)
+  const [createDate, setCreateDate] = useState('')
+  const [deleteTarget, setDeleteTarget] = useState<ScheduleReservation | null>(null)
+  const [removingId, setRemovingId] = useState<string | null>(null)
 
   useEffect(() => {
     let alive = true
@@ -136,6 +151,28 @@ export default function AgendaPage() {
   const selectedReservations = reservationsByDay.get(selected) || []
   const selectedHoliday = holidaysByDay.get(selected)
 
+  const openCreate = (date: string) => {
+    setCreateDate(date)
+    setCreateOpen(true)
+  }
+
+  const applyCreated = (r: ScheduleReservation) => {
+    setReservations((prev) => [...prev, r])
+  }
+
+  const applyDeleted = (r: ScheduleReservation) => {
+    setReservations((prev) => prev.filter((x) => x.id !== r.id))
+    setDeleteTarget(null)
+  }
+
+  const formatDay = (key: string) =>
+    new Date(key + 'T12:00:00').toLocaleDateString('pt-BR', {
+      weekday: 'long',
+      day: '2-digit',
+      month: 'long',
+      year: 'numeric',
+    })
+
   return (
     <div className="space-y-6">
       {/* Cabeçalho */}
@@ -149,14 +186,31 @@ export default function AgendaPage() {
             Calendário mensal das ordens de serviço agendadas, com reservas de agenda e feriados.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="icon" onClick={goPrev} aria-label="Mês anterior">
+        <div className="flex flex-wrap items-center gap-2">
+          {canManageReservations && (
+            <Button className="h-11" onClick={() => openCreate(selected)}>
+              <Plus className="h-4 w-4" /> Reservar dia
+            </Button>
+          )}
+          <Button
+            variant="outline"
+            size="icon"
+            className="h-11 w-11"
+            onClick={goPrev}
+            aria-label="Mês anterior"
+          >
             <ChevronLeft className="h-4 w-4" />
           </Button>
-          <Button variant="outline" onClick={goToday}>
+          <Button variant="outline" className="h-11" onClick={goToday}>
             Hoje
           </Button>
-          <Button variant="outline" size="icon" onClick={goNext} aria-label="Mês seguinte">
+          <Button
+            variant="outline"
+            size="icon"
+            className="h-11 w-11"
+            onClick={goNext}
+            aria-label="Mês seguinte"
+          >
             <ChevronRight className="h-4 w-4" />
           </Button>
         </div>
@@ -212,12 +266,16 @@ export default function AgendaPage() {
                 const dayReservations = reservationsByDay.get(key) || []
                 const holiday = holidaysByDay.get(key)
                 const weekend = day.getDay() === 0 || day.getDay() === 6
+                const hasReservations = dayReservations.length > 0
 
                 return (
                   <button
                     key={key}
                     type="button"
-                    onClick={() => setSelected(key)}
+                    onClick={() => {
+                      setSelected(key)
+                      if (canManageReservations) openCreate(key)
+                    }}
                     className={cn(
                       'min-h-[84px] sm:min-h-[104px] rounded-lg border p-1.5 text-left align-top flex flex-col gap-1 transition-colors',
                       inMonth ? 'bg-white' : 'bg-slate-50/60 text-slate-400',
@@ -232,13 +290,23 @@ export default function AgendaPage() {
                       <span
                         className={cn(
                           'text-xs font-semibold',
-                          inMonth ? 'text-slate-700' : 'text-slate-400',
+                          inMonth ? 'text-slate-700' : 'text-slate-200',
                           isToday &&
                             'h-6 w-6 rounded-full bg-blue-600 text-white flex items-center justify-center',
                         )}
                       >
                         {day.getDate()}
                       </span>
+                      {hasReservations && canManageReservations && (
+                        <span title="Reservado — clique para criar outra reserva">
+                          <Lock className="h-3 w-3 text-slate-400 shrink-0" />
+                        </span>
+                      )}
+                      {hasReservations && (
+                        <span title="Reservado — bot do WhatsApp não oferece este horário">
+                          <Lock className="h-3 w-3 text-slate-400 shrink-0" />
+                        </span>
+                      )}
                       {holiday && inMonth && (
                         <span title={holiday}>
                           <Cake className="h-3 w-3 text-pink-400 shrink-0" />
@@ -251,6 +319,7 @@ export default function AgendaPage() {
                           key={order.id}
                           onClick={(e) => {
                             e.stopPropagation()
+                            setSelected(key)
                             openOrder(order)
                           }}
                           role="button"
@@ -306,25 +375,24 @@ export default function AgendaPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-2">
               <div>
-                <p className="font-semibold text-slate-800">
-                  {(() => {
-                    const [y, m, d] = selected.split('-').map(Number)
-                    return new Date(y, m - 1, d).toLocaleDateString('pt-BR', {
-                      weekday: 'long',
-                      day: '2-digit',
-                      month: 'long',
-                      year: 'numeric',
-                    })
-                  })()}
-                </p>
+                <p className="font-semibold text-slate-800">{formatDay(selected)}</p>
                 {selectedHoliday && (
-                  <p className="text-xs text-pink-600 flex items-center gap-1 mt-0.5">
+                  <p className="text-xs text-pink-600 flex items-side gap-1 mt-0.5">
                     <Cake className="h-3 w-3" /> {selectedHoliday}
                   </p>
                 )}
               </div>
+              {canManageReservations && (
+                <Button
+                  variant="outline"
+                  className="h-11 shrink-0"
+                  onClick={() => openCreate(selected)}
+                >
+                  <Plus className="h-4 w-4" /> Reservar
+                </Button>
+              )}
             </div>
 
             {loading ? (
@@ -397,7 +465,7 @@ export default function AgendaPage() {
                         className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3 flex items-start gap-2"
                       >
                         <Lock className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" />
-                        <div className="min-w-0">
+                        <div className="min-w-0 flex-1">
                           <p className="text-xs font-medium text-slate-600">
                             {r.time ? `Horário ${r.time} bloqueado` : 'Dia inteiro bloqueado'}
                           </p>
@@ -405,6 +473,23 @@ export default function AgendaPage() {
                             <p className="text-[11px] text-slate-400 truncate">{r.reason}</p>
                           )}
                         </div>
+                        {canManageReservations && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-10 w-10 shrink-0 text-rose-500 hover:text-rose-700 hover:bg-rose-50"
+                            onClick={() => setDeleteTarget(r)}
+                            disabled={removingId === r.id}
+                            aria-label="Excluir reserva"
+                            title="Excluir reserva (desbloquear)"
+                          >
+                            {removingId === r.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-4 w-4" />
+                            )}
+                          </Button>
+                        )}
                       </div>
                     ))
                   )}
@@ -414,6 +499,21 @@ export default function AgendaPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Dialogs de reserva (dono) */}
+      <ReservationCreateDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        initialDate={createDate || selected}
+        onCreated={applyCreated}
+      />
+      <ReservationDeleteConfirm
+        target={deleteTarget}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null)
+        }}
+        onDeleted={applyDeleted}
+      />
     </div>
   )
 }
