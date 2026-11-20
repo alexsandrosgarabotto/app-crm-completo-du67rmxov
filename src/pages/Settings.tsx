@@ -16,6 +16,10 @@ import {
   MessageSquareText,
   Bot,
   Wrench,
+  KeyRound,
+  Eye,
+  EyeOff,
+  Info,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -39,6 +43,8 @@ import { ValidationModeCard } from '@/components/whatsapp/ValidationModeCard'
 
 import { TechniciansCard, ScheduleReservationsCard } from '@/components/settings/TechniciansCard'
 import { InstallAppCard } from '@/components/settings/InstallAppCard'
+import { ChangePasswordCard } from '@/components/settings/ChangePasswordCard'
+import { ResetMemberPasswordDialog } from '@/components/settings/ResetMemberPasswordDialog'
 
 const templateMeta: Record<WhatsAppTemplateKey, { title: string; hint: string }> = {
   greeting: {
@@ -215,9 +221,13 @@ export default function SettingsPage() {
   const [isInviteOpen, setIsInviteOpen] = useState(false)
   const [inviteName, setInviteName] = useState('')
   const [inviteEmail, setInviteEmail] = useState('')
+  const [invitePassword, setInvitePassword] = useState('')
+  const [invitePasswordConfirm, setInvitePasswordConfirm] = useState('')
+  const [showInvitePassword, setShowInvitePassword] = useState(false)
   const [invitePhone, setInvitePhone] = useState('')
   const [inviteRole, setInviteRole] = useState<UserRole>('seller')
   const [submittingInvite, setSubmittingInvite] = useState(false)
+  const [resetTarget, setResetTarget] = useState<User | null>(null)
 
   useEffect(() => {
     loadAll()
@@ -308,6 +318,22 @@ export default function SettingsPage() {
       })
       return
     }
+    if (invitePassword.length < 8) {
+      toast({
+        title: 'Atenção',
+        description: 'A senha do acesso precisa ter pelo menos 8 caracteres.',
+        variant: 'destructive',
+      })
+      return
+    }
+    if (invitePassword !== invitePasswordConfirm) {
+      toast({
+        title: 'Atenção',
+        description: 'A senha e a confirmação não são iguais.',
+        variant: 'destructive',
+      })
+      return
+    }
 
     setSubmittingInvite(true)
     try {
@@ -316,22 +342,34 @@ export default function SettingsPage() {
         email: inviteEmail.trim(),
         role: inviteRole,
         phone: invitePhone.trim() || undefined,
+        password: invitePassword,
       })
 
       toast({
         title: 'Colaborador adicionado!',
-        description: `E-mail de acesso e instruções enviados para ${inviteEmail}.`,
+        description: `Acesso criado. Repasse ao colaborador o e-mail ${inviteEmail} e a senha definida.`,
       })
       setTeam((prev) => [...prev, newMember])
       setIsInviteOpen(false)
       setInviteName('')
       setInviteEmail('')
+      setInvitePassword('')
+      setInvitePasswordConfirm('')
+      setShowInvitePassword(false)
       setInvitePhone('')
       setInviteRole('seller')
     } catch (err: any) {
+      let description = 'Este e-mail já pode estar cadastrado na plataforma.'
+      if (err?.response?.data?.email?.message) {
+        description = 'Este e-mail já está cadastrado na plataforma.'
+      } else if (err?.response?.data?.password?.message) {
+        description = 'A senha precisa ter pelo menos 8 caracteres.'
+      } else if (err?.message) {
+        description = err.message
+      }
       toast({
         title: 'Erro ao convidar membro',
-        description: err.message || 'Este e-mail já pode estar cadastrado na plataforma.',
+        description,
         variant: 'destructive',
       })
     } finally {
@@ -431,6 +469,7 @@ export default function SettingsPage() {
         {/* ABA: DADOS DA EMPRESA */}
         <TabsContent value="company" className="pt-4 space-y-4">
           <InstallAppCard />
+          <ChangePasswordCard />
           <Card className="border-slate-200 shadow-xs">
             <CardHeader>
               <CardTitle className="text-lg">Perfil do Negócio</CardTitle>
@@ -603,6 +642,14 @@ export default function SettingsPage() {
                           </Button>
                           <Button
                             variant="ghost"
+                            size="sm"
+                            className="text-xs text-slate-600 h-11"
+                            onClick={() => setResetTarget(member)}
+                          >
+                            <KeyRound className="h-3.5 w-3.5 mr-1" /> Redefinir senha
+                          </Button>
+                          <Button
+                            variant="ghost"
                             size="icon"
                             className="h-11 w-11 text-rose-500 hover:text-rose-700 hover:bg-rose-50"
                             onClick={() => handleDeleteMember(member)}
@@ -687,6 +734,14 @@ export default function SettingsPage() {
                                   </Button>
                                   <Button
                                     variant="ghost"
+                                    size="sm"
+                                    className="text-xs text-slate-600 h-11"
+                                    onClick={() => setResetTarget(member)}
+                                  >
+                                    <KeyRound className="h-3.5 w-3.5 mr-1" /> Redefinir senha
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
                                     size="icon"
                                     className="h-11 w-11 text-rose-500 hover:text-rose-700 hover:bg-rose-50"
                                     onClick={() => handleDeleteMember(member)}
@@ -722,8 +777,8 @@ export default function SettingsPage() {
           <DialogHeader>
             <DialogTitle>Convidar Membro da Equipe</DialogTitle>
             <DialogDescription>
-              O novo colaborador receberá as instruções por e-mail para definir sua senha e acessar
-              o CRM.
+              O membro fará login com o e-mail e a senha definidos aqui — nenhum e-mail é enviado.
+              Repasse o acesso ao colaborador por fora (WhatsApp, pessoalmente).
             </DialogDescription>
           </DialogHeader>
 
@@ -749,6 +804,60 @@ export default function SettingsPage() {
                 placeholder="joao@minhaempresa.com"
                 required
               />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="inv-password">Senha de Acesso *</Label>
+                <div className="relative">
+                  <Input
+                    id="inv-password"
+                    type={showInvitePassword ? 'text' : 'password'}
+                    autoComplete="new-password"
+                    value={invitePassword}
+                    onChange={(e) => setInvitePassword(e.target.value)}
+                    placeholder="Mínimo 8 caracteres"
+                    required
+                    minLength={8}
+                    className="pr-10"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowInvitePassword((v) => !v)}
+                    aria-label={showInvitePassword ? 'Ocultar senha' : 'Mostrar senha'}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                  >
+                    {showInvitePassword ? (
+                      <EyeOff className="h-4 w-4" />
+                    ) : (
+                      <Eye className="h-4 w-4" />
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="inv-password-confirm">Confirmar Senha *</Label>
+                <Input
+                  id="inv-password-confirm"
+                  type={showInvitePassword ? 'text' : 'password'}
+                  autoComplete="new-password"
+                  value={invitePasswordConfirm}
+                  onChange={(e) => setInvitePasswordConfirm(e.target.value)}
+                  placeholder="Repita a senha"
+                  required
+                  minLength={8}
+                />
+              </div>
+            </div>
+
+            <div className="flex items-start gap-2 rounded-lg bg-blue-50 border border-blue-100 p-3">
+              <Info className="h-4 w-4 text-blue-600 mt-0.5 shrink-0" />
+              <p className="text-xs text-blue-800">
+                O membro fará login com o e-mail e a senha definidos aqui. Defina uma senha
+                provisória e oriente o colaborador a trocá-la em Configurações → Alterar minha
+                senha.
+              </p>
             </div>
 
             <div className="space-y-1.5">
@@ -786,12 +895,18 @@ export default function SettingsPage() {
                 className="bg-blue-600 hover:bg-blue-700"
                 disabled={submittingInvite}
               >
-                {submittingInvite ? 'Enviando convite...' : 'Enviar Convite'}
+                {submittingInvite ? 'Criando acesso...' : 'Criar Acesso'}
               </Button>
             </DialogFooter>
           </form>
         </DialogContent>
       </Dialog>
+
+      <ResetMemberPasswordDialog
+        member={resetTarget}
+        onClose={() => setResetTarget(null)}
+        onSaved={() => setResetTarget(null)}
+      />
     </div>
   )
 }

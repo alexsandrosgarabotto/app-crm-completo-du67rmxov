@@ -27,31 +27,45 @@ export const companyService = {
     })
   },
 
+  /**
+   * Cria um membro da equipe já com a senha definida pelo dono.
+   * Não há envio de e-mail de convite: o dono repassa e-mail + senha por fora
+   * (WhatsApp, pessoalmente) e o membro faz login imediatamente.
+   */
   async inviteOrAddMember(data: {
     name: string
     email: string
     role: UserRole
     phone?: string
+    password: string
   }): Promise<User> {
-    // Cria o usuário com uma senha temporária padrão que pode ser resetada
-    const tempPassword = `Crm@${Math.floor(100000 + Math.random() * 900000)}`
-    const created = await pb.collection('users').create<User>({
+    return await pb.collection('users').create<User>({
       email: data.email,
       name: data.name,
       role: data.role,
       phone: data.phone || '',
-      password: tempPassword,
-      passwordConfirm: tempPassword,
+      password: data.password,
+      passwordConfirm: data.password,
     })
+  },
 
-    try {
-      // Dispara e-mail de recuperação/redefinição para o novo colaborador
-      await pb.collection('users').requestPasswordReset(data.email)
-    } catch {
-      // Best-effort
-    }
+  /** Redefine a senha de um membro da equipe (ação do dono, sem e-mail). */
+  async resetMemberPassword(id: string, password: string): Promise<User> {
+    return await pb.collection('users').update<User>(id, {
+      password,
+      passwordConfirm: password,
+    })
+  },
 
-    return created
+  /** Troca a senha do usuário autenticado (valida a senha atual no backend). */
+  async changeMyPassword(oldPassword: string, password: string): Promise<void> {
+    const id = pb.authStore.record?.id
+    if (!id) throw new Error('Usuário não autenticado.')
+    await pb.collection('users').update<User>(id, {
+      oldPassword,
+      password,
+      passwordConfirm: password,
+    })
   },
 
   async updateUserRole(id: string, role: UserRole): Promise<User> {
